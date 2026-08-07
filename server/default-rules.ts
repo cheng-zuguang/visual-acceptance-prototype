@@ -1,4 +1,5 @@
 import * as yaml from "js-yaml";
+import type { Locale } from "../src/locale";
 import type { AcceptanceConfig, Severity } from "../src/types";
 
 export const DEFAULT_RULES_YAML = `# PROTOTYPE — 视觉验收规则，可根据误报与漏报持续调整
@@ -39,6 +40,49 @@ capture:
   settle_ms: 500
   # wait_for_selector: "[data-page-ready]"
 `;
+
+export const DEFAULT_RULES_YAML_EN = `# PROTOTYPE — visual acceptance rules; tune as false positives and false negatives are discovered
+viewport: auto
+
+thresholds:
+  visual_similarity_min: 0.95
+  pixel_threshold: 0.10
+  position_tolerance_px: 4
+  size_tolerance_px: 4
+  font_size_tolerance_px: 1
+  color_delta_e: 3
+  match_confidence_min: 0.72
+  high_confidence_min: 0.86
+
+rules:
+  visual_similarity: error
+  missing_element: error
+  extra_element: warning
+  position: error
+  size: error
+  content: error
+  typography: error
+  color: warning
+  decoration: warning
+  broken_image: error
+  horizontal_overflow: error
+  clipped_text: warning
+
+# CSS selectors ignored by both screenshots and DOM analysis
+ignore: []
+
+# Figma node IDs that must fail the gate when unmatched
+critical_figma_nodes: []
+
+capture:
+  timeout_ms: 10000
+  settle_ms: 500
+  # wait_for_selector: "[data-page-ready]"
+`;
+
+export function defaultRulesYaml(locale: Locale): string {
+  return locale === "en" ? DEFAULT_RULES_YAML_EN : DEFAULT_RULES_YAML;
+}
 
 const DEFAULT_CONFIG: AcceptanceConfig = {
   viewport: "auto",

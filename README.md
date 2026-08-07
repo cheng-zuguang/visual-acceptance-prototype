@@ -1,6 +1,6 @@
 # DiffLab 视觉验收原型
 
-[简体中文](./README.md) | [English](./README.en.md)
+简体中文 | [English](./README.en.md)
 
 DiffLab 将 Figma Frame 或基准图片与 H5 页面放在同一视口下比对，并按照 YAML 规则生成可复现的通过/不通过结论、差异区域、DOM 定位和修改建议。
 

@@ -52,7 +52,7 @@ button:disabled { cursor: not-allowed; opacity: .42; }
   background: rgba(255,255,255,.94);
   border-bottom: 1px solid var(--line);
   display: grid;
-  grid-template-columns: 230px 1fr 230px;
+  grid-template-columns: 230px 1fr 330px;
   align-items: center;
   padding: 0 34px;
   position: sticky;
@@ -93,7 +93,14 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .step-item.complete { color: var(--green); }
 .step-item.complete .step-index { color: #fff; background: var(--green); border-color: var(--green); }
 
-.prototype-pill { justify-self: end; border: 1px solid #d7d7d2; background: #fafaf8; color: #70706b; border-radius: 999px; padding: 7px 11px; font: 600 10px ui-monospace, monospace; text-transform: uppercase; letter-spacing: .05em; }
+.header-tools { justify-self: end; display: flex; align-items: center; gap: 9px; }
+
+.prototype-pill { border: 1px solid #d7d7d2; background: #fafaf8; color: #70706b; border-radius: 999px; padding: 7px 11px; font: 600 10px ui-monospace, monospace; text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
+
+.language-switch { height: 32px; padding: 3px 4px 3px 8px; display: flex; align-items: center; gap: 2px; border: 1px solid #d7d7d2; border-radius: 999px; background: #fff; color: #787873; }
+.language-switch > svg { margin-right: 2px; }
+.language-switch button { height: 24px; min-width: 31px; padding: 0 7px; border: 0; border-radius: 999px; background: transparent; color: #858580; font: 650 9px ui-monospace, monospace; }
+.language-switch button.active { background: var(--ink); color: #fff; }
 
 .workspace { width: min(1240px, calc(100vw - 80px)); margin: 0 auto; flex: 1; }
 
@@ -370,7 +377,8 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .app-footer { min-height: 40px; border-top: 1px solid #deded9; display: flex; justify-content: space-between; align-items: center; padding: 0 34px; color: #92928d; font: 550 8px ui-monospace, monospace; text-transform: uppercase; letter-spacing: .06em; }
 
 @media (max-width: 1220px) {
-  .app-header { grid-template-columns: 180px 1fr 180px; padding: 0 24px; }
+  .app-header { grid-template-columns: 180px 1fr 160px; padding: 0 24px; }
+  .header-tools .prototype-pill { display: none; }
   .step-item i { width: 24px; margin: 0 8px; }
   .step-item > span:nth-child(2) { min-width: 78px; }
   .setup-grid { gap: 54px; }

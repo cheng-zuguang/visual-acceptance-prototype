@@ -1,5 +1,6 @@
 import { chromium, type Browser } from "playwright";
 import type { AcceptanceConfig, Box, DomElement, ElementStyle } from "../src/types";
+import { localText, type Locale } from "./i18n";
 
 export interface StaticAudit {
   rule: "broken_image" | "horizontal_overflow" | "clipped_text";
@@ -33,15 +34,15 @@ async function launchBrowser(): Promise<Browser> {
   }
 }
 
-function validatePageUrl(input: string): URL {
+function validatePageUrl(input: string, locale: Locale): URL {
   let url: URL;
   try {
     url = new URL(input);
   } catch {
-    throw new Error("H5 地址格式无效。");
+    throw new Error(localText(locale, "H5 地址格式无效。", "The H5 URL is invalid."));
   }
   if (!['http:', 'https:'].includes(url.protocol)) {
-    throw new Error("H5 地址只支持 http 或 https 协议。");
+    throw new Error(localText(locale, "H5 地址只支持 http 或 https 协议。", "The H5 URL must use HTTP or HTTPS."));
   }
   return url;
 }
@@ -74,9 +75,10 @@ export async function capturePage(
   inputUrl: string,
   viewport: { width: number; height: number },
   config: AcceptanceConfig,
+  locale: Locale,
   providedBrowser?: Browser
 ): Promise<PageCapture> {
-  const url = validatePageUrl(inputUrl);
+  const url = validatePageUrl(inputUrl, locale);
   const browser = providedBrowser ?? (await launchBrowser());
   const context = await browser.newContext({
     viewport: {
@@ -105,7 +107,7 @@ export async function capturePage(
         state: "visible",
         timeout: config.capture.timeoutMs
       });
-      diagnostics.push(`已等待选择器：${config.capture.waitForSelector}`);
+      diagnostics.push(localText(locale, `已等待选择器：${config.capture.waitForSelector}`, `Waited for selector: ${config.capture.waitForSelector}`));
     }
 
     await page.addStyleTag({
@@ -153,7 +155,7 @@ export async function capturePage(
         }
       }, selector);
       if (isValid) validIgnoreSelectors.push(selector);
-      else diagnostics.push(`忽略了无效 CSS 选择器：${selector}`);
+      else diagnostics.push(localText(locale, `忽略了无效 CSS 选择器：${selector}`, `Ignored invalid CSS selector: ${selector}`));
     }
     if (validIgnoreSelectors.length) {
       await page.addStyleTag({
@@ -162,10 +164,12 @@ export async function capturePage(
     }
 
     const isStable = await stableLayout(page, config.capture.settleMs);
-    diagnostics.push(isStable ? "页面布局已稳定。" : "页面在等待窗口内仍有布局变化，结果可能含动态噪声。");
+    diagnostics.push(isStable
+      ? localText(locale, "页面布局已稳定。", "The page layout stabilized.")
+      : localText(locale, "页面在等待窗口内仍有布局变化，结果可能含动态噪声。", "The layout was still changing after the wait window, so the result may contain dynamic noise."));
 
     const analysis = await page.evaluate(
-      ({ ignored, viewportWidth, viewportHeight }) => {
+      ({ ignored, viewportWidth, viewportHeight, isEnglish }) => {
         const ignoredElements = new Set<Element>();
         for (const selector of ignored) {
           document.querySelectorAll(selector).forEach((element) => ignoredElements.add(element));
@@ -294,7 +298,7 @@ export async function capturePage(
             audits.push({
               rule: "broken_image",
               selector: selectorFor(element),
-              summary: "图片资源加载失败。",
+              summary: isEnglish ? "The image asset failed to load." : "图片资源加载失败。",
               box: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
             });
           }
@@ -309,7 +313,7 @@ export async function capturePage(
             audits.push({
               rule: "clipped_text",
               selector: selectorFor(element),
-              summary: `文本可能被截断：“${text.slice(0, 60)}”`,
+              summary: isEnglish ? `Text may be clipped: “${text.slice(0, 60)}”` : `文本可能被截断：“${text.slice(0, 60)}”`,
               box: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
             });
           }
@@ -319,7 +323,9 @@ export async function capturePage(
           audits.push({
             rule: "horizontal_overflow",
             selector: "html",
-            summary: `页面横向宽度 ${document.documentElement.scrollWidth}px 超出视口 ${viewportWidth}px。`
+            summary: isEnglish
+              ? `The page width of ${document.documentElement.scrollWidth}px exceeds the ${viewportWidth}px viewport.`
+              : `页面横向宽度 ${document.documentElement.scrollWidth}px 超出视口 ${viewportWidth}px。`
           });
         }
 
@@ -328,7 +334,8 @@ export async function capturePage(
       {
         ignored: validIgnoreSelectors,
         viewportWidth: Math.round(viewport.width),
-        viewportHeight: Math.round(viewport.height)
+        viewportHeight: Math.round(viewport.height),
+        isEnglish: locale === "en"
       }
     );
 
@@ -340,7 +347,7 @@ export async function capturePage(
       scale: "css"
     });
 
-    diagnostics.push(`已提取 ${analysis.elements.length} 个可见 H5 元素。`);
+    diagnostics.push(localText(locale, `已提取 ${analysis.elements.length} 个可见 H5 元素。`, `Extracted ${analysis.elements.length} visible H5 elements.`));
     return {
       image: Buffer.from(screenshot),
       elements: analysis.elements,

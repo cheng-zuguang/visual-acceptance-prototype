@@ -11,6 +11,7 @@ import type {
 import type { PageCapture, StaticAudit } from "./capture";
 import type { DesignSource } from "./design";
 import { severityFor } from "./default-rules";
+import { localText, type Locale } from "./i18n";
 
 interface VisualComparison {
   diff: Buffer;
@@ -46,8 +47,8 @@ function round(value: number, decimals = 1): number {
   return Math.round(value * factor) / factor;
 }
 
-function formatPx(value: number | undefined): string {
-  return typeof value === "number" ? `${round(value)}px` : "未设置";
+function formatPx(value: number | undefined, locale: Locale): string {
+  return typeof value === "number" ? `${round(value)}px` : localText(locale, "未设置", "not set");
 }
 
 function centerDistance(a: Box, b: Box): number {
@@ -316,19 +317,24 @@ function confidenceSeverity(
 function issueForAudit(
   audit: StaticAudit,
   config: AcceptanceConfig,
-  create: ReturnType<typeof addIssueFactory>
+  create: ReturnType<typeof addIssueFactory>,
+  locale: Locale
 ): Issue | undefined {
   const severity = severityFor(config, audit.rule);
   if (!severity) return undefined;
   const suggestions: Record<StaticAudit["rule"], string> = {
-    broken_image: "检查资源地址、构建产物路径和跨域访问策略。",
-    horizontal_overflow: "定位超出视口的元素，修正固定宽度、负边距或未换行内容。",
-    clipped_text: "检查容器尺寸、line-height、overflow 和文本换行规则。"
+    broken_image: localText(locale, "检查资源地址、构建产物路径和跨域访问策略。", "Check the asset URL, build output paths, and cross-origin access policy."),
+    horizontal_overflow: localText(locale, "定位超出视口的元素，修正固定宽度、负边距或未换行内容。", "Find elements extending beyond the viewport and fix fixed widths, negative margins, or unwrapped content."),
+    clipped_text: localText(locale, "检查容器尺寸、line-height、overflow 和文本换行规则。", "Check container dimensions, line-height, overflow, and text wrapping rules.")
   };
   return create({
-    category: "静态规则",
+    category: localText(locale, "静态规则", "Static audit"),
     severity,
-    title: audit.rule === "broken_image" ? "图片加载失败" : audit.rule === "horizontal_overflow" ? "页面横向溢出" : "文本可能被截断",
+    title: audit.rule === "broken_image"
+      ? localText(locale, "图片加载失败", "Image failed to load")
+      : audit.rule === "horizontal_overflow"
+        ? localText(locale, "页面横向溢出", "Horizontal page overflow")
+        : localText(locale, "文本可能被截断", "Text may be clipped"),
     summary: audit.summary,
     suggestion: suggestions[audit.rule],
     selector: audit.selector,
@@ -340,7 +346,8 @@ function issueForAudit(
 export async function compareDesignToPage(
   design: DesignSource,
   capture: PageCapture,
-  config: AcceptanceConfig
+  config: AcceptanceConfig,
+  locale: Locale
 ): Promise<ComparisonResult> {
   const width = Math.round(design.viewport.width);
   const height = Math.round(design.viewport.height);
@@ -360,13 +367,17 @@ export async function compareDesignToPage(
   if (visualSeverity && visual.similarity < config.thresholds.visualSimilarityMin) {
     issues.push(
       create({
-        category: "视觉相似度",
+        category: localText(locale, "视觉相似度", "Visual similarity"),
         severity: visualSeverity,
-        title: "整体视觉相似度未达标",
-        summary: `当前相似度 ${(visual.similarity * 100).toFixed(2)}%，低于最低要求 ${(config.thresholds.visualSimilarityMin * 100).toFixed(2)}%。`,
+        title: localText(locale, "整体视觉相似度未达标", "Overall visual similarity is below the threshold"),
+        summary: localText(
+          locale,
+          `当前相似度 ${(visual.similarity * 100).toFixed(2)}%，低于最低要求 ${(config.thresholds.visualSimilarityMin * 100).toFixed(2)}%。`,
+          `Current similarity is ${(visual.similarity * 100).toFixed(2)}%, below the minimum ${(config.thresholds.visualSimilarityMin * 100).toFixed(2)}%.`
+        ),
         expected: `≥ ${(config.thresholds.visualSimilarityMin * 100).toFixed(2)}%`,
         actual: `${(visual.similarity * 100).toFixed(2)}%`,
-        suggestion: "先处理报告中变化像素最多的区域，再重新运行验收。",
+        suggestion: localText(locale, "先处理报告中变化像素最多的区域，再重新运行验收。", "Fix the areas with the most changed pixels first, then rerun acceptance."),
         rule: "visual_similarity"
       })
     );
@@ -375,11 +386,15 @@ export async function compareDesignToPage(
   visual.regions.forEach((region, index) => {
     issues.push(
       create({
-        category: "视觉差异",
+        category: localText(locale, "视觉差异", "Visual difference"),
         severity: "warning",
-        title: `高密度差异区域 ${index + 1}`,
-        summary: `该区域包含 ${region.changedPixels.toLocaleString()} 个变化像素，区域差异密度 ${(region.density * 100).toFixed(1)}%。`,
-        suggestion: "在叠加视图中检查该区域，再结合元素级规则确认具体属性。",
+        title: localText(locale, `高密度差异区域 ${index + 1}`, `High-density difference region ${index + 1}`),
+        summary: localText(
+          locale,
+          `该区域包含 ${region.changedPixels.toLocaleString(locale)} 个变化像素，区域差异密度 ${(region.density * 100).toFixed(1)}%。`,
+          `This region contains ${region.changedPixels.toLocaleString(locale)} changed pixels with a difference density of ${(region.density * 100).toFixed(1)}%.`
+        ),
+        suggestion: localText(locale, "在叠加视图中检查该区域，再结合元素级规则确认具体属性。", "Inspect this area in the overlay view, then use element-level rules to identify the affected properties."),
         box: region,
         rule: "visual_region"
       })
@@ -417,13 +432,13 @@ export async function compareDesignToPage(
         issues.push(
           create({
             ...common,
-            category: "布局",
+            category: localText(locale, "布局", "Layout"),
             severity,
-            title: `${expected.name} 位置偏移`,
-            summary: `元素位置偏移 ${round(positionDelta)}px，超过允许值 ${config.thresholds.positionTolerancePx}px。`,
-            expected: `x ${formatPx(expected.box.x)} · y ${formatPx(expected.box.y)}`,
-            actual: `x ${formatPx(actual.box.x)} · y ${formatPx(actual.box.y)}`,
-            suggestion: `检查 ${actual.selector} 的定位、容器 padding、margin 和对齐方式。`,
+            title: localText(locale, `${expected.name} 位置偏移`, `${expected.name} is mispositioned`),
+            summary: localText(locale, `元素位置偏移 ${round(positionDelta)}px，超过允许值 ${config.thresholds.positionTolerancePx}px。`, `The element is offset by ${round(positionDelta)}px, exceeding the ${config.thresholds.positionTolerancePx}px tolerance.`),
+            expected: `x ${formatPx(expected.box.x, locale)} · y ${formatPx(expected.box.y, locale)}`,
+            actual: `x ${formatPx(actual.box.x, locale)} · y ${formatPx(actual.box.y, locale)}`,
+            suggestion: localText(locale, `检查 ${actual.selector} 的定位、容器 padding、margin 和对齐方式。`, `Check positioning, container padding, margins, and alignment for ${actual.selector}.`),
             rule: "position"
           })
         );
@@ -440,13 +455,13 @@ export async function compareDesignToPage(
         issues.push(
           create({
             ...common,
-            category: "布局",
+            category: localText(locale, "布局", "Layout"),
             severity,
-            title: `${expected.name} 尺寸不一致`,
-            summary: `最大尺寸差 ${round(sizeDelta)}px，超过允许值 ${config.thresholds.sizeTolerancePx}px。`,
-            expected: `${formatPx(expected.box.width)} × ${formatPx(expected.box.height)}`,
-            actual: `${formatPx(actual.box.width)} × ${formatPx(actual.box.height)}`,
-            suggestion: `调整 ${actual.selector} 的 width、height、padding 或 box-sizing。`,
+            title: localText(locale, `${expected.name} 尺寸不一致`, `${expected.name} has incorrect dimensions`),
+            summary: localText(locale, `最大尺寸差 ${round(sizeDelta)}px，超过允许值 ${config.thresholds.sizeTolerancePx}px。`, `The largest dimension delta is ${round(sizeDelta)}px, exceeding the ${config.thresholds.sizeTolerancePx}px tolerance.`),
+            expected: `${formatPx(expected.box.width, locale)} × ${formatPx(expected.box.height, locale)}`,
+            actual: `${formatPx(actual.box.width, locale)} × ${formatPx(actual.box.height, locale)}`,
+            suggestion: localText(locale, `调整 ${actual.selector} 的 width、height、padding 或 box-sizing。`, `Adjust width, height, padding, or box-sizing for ${actual.selector}.`),
             rule: "size"
           })
         );
@@ -463,13 +478,13 @@ export async function compareDesignToPage(
         issues.push(
           create({
             ...common,
-            category: "内容",
+            category: localText(locale, "内容", "Content"),
             severity,
-            title: `${expected.name} 文案不一致`,
-            summary: "映射元素的可见文本与设计稿不同。",
+            title: localText(locale, `${expected.name} 文案不一致`, `${expected.name} text does not match`),
+            summary: localText(locale, "映射元素的可见文本与设计稿不同。", "The mapped element's visible text differs from the design."),
             expected: expected.text,
-            actual: actual.text || "空文本",
-            suggestion: `核对 ${actual.selector} 的文案和国际化资源。`,
+            actual: actual.text || localText(locale, "空文本", "empty text"),
+            suggestion: localText(locale, `核对 ${actual.selector} 的文案和国际化资源。`, `Check the copy and localization resources for ${actual.selector}.`),
             rule: "content"
           })
         );
@@ -483,7 +498,7 @@ export async function compareDesignToPage(
       Math.abs(expected.style.fontSize - actual.style.fontSize) > config.thresholds.fontSizeTolerancePx
     ) {
       typographyDifferences.push(
-        `font-size ${formatPx(actual.style.fontSize)} → ${formatPx(expected.style.fontSize)}`
+        `font-size ${formatPx(actual.style.fontSize, locale)} → ${formatPx(expected.style.fontSize, locale)}`
       );
     }
     if (
@@ -501,7 +516,7 @@ export async function compareDesignToPage(
       Math.abs(expected.style.lineHeight - actual.style.lineHeight) > 2
     ) {
       typographyDifferences.push(
-        `line-height ${formatPx(actual.style.lineHeight)} → ${formatPx(expected.style.lineHeight)}`
+        `line-height ${formatPx(actual.style.lineHeight, locale)} → ${formatPx(expected.style.lineHeight, locale)}`
       );
     }
     if (typographyDifferences.length) {
@@ -514,11 +529,11 @@ export async function compareDesignToPage(
         issues.push(
           create({
             ...common,
-            category: "排版",
+            category: localText(locale, "排版", "Typography"),
             severity,
-            title: `${expected.name} 排版属性不一致`,
-            summary: typographyDifferences.join("；"),
-            suggestion: `按设计值调整 ${actual.selector} 的字体相关 CSS。`,
+            title: localText(locale, `${expected.name} 排版属性不一致`, `${expected.name} typography does not match`),
+            summary: typographyDifferences.join(locale === "en" ? "; " : "；"),
+            suggestion: localText(locale, `按设计值调整 ${actual.selector} 的字体相关 CSS。`, `Update the typography CSS for ${actual.selector} to match the design.`),
             rule: "typography"
           })
         );
@@ -538,13 +553,13 @@ export async function compareDesignToPage(
         issues.push(
           create({
             ...common,
-            category: "颜色",
+            category: localText(locale, "颜色", "Color"),
             severity,
-            title: `${expected.name} 颜色存在差异`,
-            summary: `颜色差 ΔE ${round(delta)}，超过允许值 ${config.thresholds.colorDeltaE}。`,
+            title: localText(locale, `${expected.name} 颜色存在差异`, `${expected.name} color does not match`),
+            summary: localText(locale, `颜色差 ΔE ${round(delta)}，超过允许值 ${config.thresholds.colorDeltaE}。`, `The color delta ΔE is ${round(delta)}, exceeding the ${config.thresholds.colorDeltaE} tolerance.`),
             expected: expectedColor,
             actual: actualColor,
-            suggestion: `将 ${actual.selector} 的颜色调整为设计值，并检查透明度与父层叠加。`,
+            suggestion: localText(locale, `将 ${actual.selector} 的颜色调整为设计值，并检查透明度与父层叠加。`, `Set ${actual.selector} to the design color and check opacity and parent-layer blending.`),
             rule: "color"
           })
         );
@@ -558,7 +573,7 @@ export async function compareDesignToPage(
       Math.abs(expected.style.borderRadius - actual.style.borderRadius) > 2
     ) {
       decorationDifferences.push(
-        `border-radius ${formatPx(actual.style.borderRadius)} → ${formatPx(expected.style.borderRadius)}`
+        `border-radius ${formatPx(actual.style.borderRadius, locale)} → ${formatPx(expected.style.borderRadius, locale)}`
       );
     }
     if (
@@ -567,7 +582,7 @@ export async function compareDesignToPage(
       Math.abs(expected.style.borderWidth - actual.style.borderWidth) > 1
     ) {
       decorationDifferences.push(
-        `border-width ${formatPx(actual.style.borderWidth)} → ${formatPx(expected.style.borderWidth)}`
+        `border-width ${formatPx(actual.style.borderWidth, locale)} → ${formatPx(expected.style.borderWidth, locale)}`
       );
     }
     if (
@@ -587,11 +602,11 @@ export async function compareDesignToPage(
         issues.push(
           create({
             ...common,
-            category: "装饰",
+            category: localText(locale, "装饰", "Decoration"),
             severity,
-            title: `${expected.name} 装饰属性不一致`,
-            summary: decorationDifferences.join("；"),
-            suggestion: `按设计值调整 ${actual.selector} 的边框、圆角或透明度。`,
+            title: localText(locale, `${expected.name} 装饰属性不一致`, `${expected.name} decoration does not match`),
+            summary: decorationDifferences.join(locale === "en" ? "; " : "；"),
+            suggestion: localText(locale, `按设计值调整 ${actual.selector} 的边框、圆角或透明度。`, `Update the border, corner radius, or opacity for ${actual.selector} to match the design.`),
             rule: "decoration"
           })
         );
@@ -608,15 +623,15 @@ export async function compareDesignToPage(
       /button|cta|logo|input|按钮|输入|图标/i.test(element.name);
     issues.push(
       create({
-        category: "元素匹配",
+        category: localText(locale, "元素匹配", "Element matching"),
         severity: isCritical ? missingSeverity : "pending",
-        title: `${element.name} 未在 H5 中匹配`,
+        title: localText(locale, `${element.name} 未在 H5 中匹配`, `${element.name} was not matched in the H5 page`),
         summary: isCritical
-          ? "关键设计元素无法在实际页面中找到。"
-          : "该视觉节点没有可靠的 DOM 映射，需要人工确认。",
+          ? localText(locale, "关键设计元素无法在实际页面中找到。", "A critical design element could not be found on the live page.")
+          : localText(locale, "该视觉节点没有可靠的 DOM 映射，需要人工确认。", "This visual node has no reliable DOM mapping and needs human review."),
         expected: element.text || `${round(element.box.width)} × ${round(element.box.height)}px`,
-        actual: "未匹配",
-        suggestion: `确认元素是否缺失；必要时为对应 DOM 增加 data-figma-id="${element.id}"。`,
+        actual: localText(locale, "未匹配", "unmatched"),
+        suggestion: localText(locale, `确认元素是否缺失；必要时为对应 DOM 增加 data-figma-id="${element.id}"。`, `Confirm whether the element is missing; if needed, add data-figma-id="${element.id}" to the corresponding DOM element.`),
         figmaNodeId: element.id,
         box: element.box,
         rule: "missing_element"
@@ -634,11 +649,15 @@ export async function compareDesignToPage(
     for (const element of meaningfulExtras.slice(0, 20)) {
       issues.push(
         create({
-          category: "元素匹配",
+          category: localText(locale, "元素匹配", "Element matching"),
           severity: extraSeverity,
-          title: "H5 中可能存在额外元素",
-          summary: `${element.selector}${element.text ? ` 显示“${element.text.slice(0, 50)}”` : ""}，未匹配到设计节点。`,
-          suggestion: "确认它是否为设计稿未包含的新增内容；若是误判，可增加 data-figma-id 或忽略选择器。",
+          title: localText(locale, "H5 中可能存在额外元素", "The H5 page may contain an extra element"),
+          summary: localText(
+            locale,
+            `${element.selector}${element.text ? ` 显示“${element.text.slice(0, 50)}”` : ""}，未匹配到设计节点。`,
+            `${element.selector}${element.text ? ` displays “${element.text.slice(0, 50)}”` : ""} and was not matched to a design node.`
+          ),
+          suggestion: localText(locale, "确认它是否为设计稿未包含的新增内容；若是误判，可增加 data-figma-id 或忽略选择器。", "Confirm whether this is content absent from the design. If it is a false positive, add data-figma-id or ignore the selector."),
           selector: element.selector,
           box: element.box,
           rule: "extra_element"
@@ -648,7 +667,7 @@ export async function compareDesignToPage(
   }
 
   for (const audit of capture.audits) {
-    const issue = issueForAudit(audit, config, create);
+    const issue = issueForAudit(audit, config, create, locale);
     if (issue) issues.push(issue);
   }
 

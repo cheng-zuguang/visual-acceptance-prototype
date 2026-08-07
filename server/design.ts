@@ -1,5 +1,6 @@
 import sharp from "sharp";
 import type { Box, DesignElement, ElementStyle } from "../src/types";
+import { localText, type Locale } from "./i18n";
 
 export interface DesignSource {
   label: string;
@@ -27,28 +28,28 @@ interface FigmaNode {
   children?: FigmaNode[];
 }
 
-function parseFigmaUrl(input: string): { fileKey: string; nodeId: string } {
+function parseFigmaUrl(input: string, locale: Locale): { fileKey: string; nodeId: string } {
   let url: URL;
   try {
     url = new URL(input);
   } catch {
-    throw new Error("Figma 链接格式无效。请粘贴包含 node-id 的 Frame 分享链接。");
+    throw new Error(localText(locale, "Figma 链接格式无效。请粘贴包含 node-id 的 Frame 分享链接。", "The Figma URL is invalid. Paste a Frame share link that includes node-id."));
   }
 
   const match = url.pathname.match(/^\/(?:design|file|proto)\/([^/]+)/);
   const rawNodeId = url.searchParams.get("node-id");
   if (!match?.[1] || !rawNodeId) {
-    throw new Error("Figma 链接必须指向具体 Frame，并包含 node-id 参数。");
+    throw new Error(localText(locale, "Figma 链接必须指向具体 Frame，并包含 node-id 参数。", "The Figma link must point to a specific Frame and include the node-id parameter."));
   }
 
   return { fileKey: match[1], nodeId: rawNodeId.replace(/-/g, ":") };
 }
 
-async function figmaFetch<T>(url: string, token: string): Promise<T> {
+async function figmaFetch<T>(url: string, token: string, locale: Locale): Promise<T> {
   const response = await fetch(url, { headers: { "X-Figma-Token": token } });
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Figma API 请求失败（${response.status}）：${body.slice(0, 240)}`);
+    throw new Error(localText(locale, `Figma API 请求失败（${response.status}）：${body.slice(0, 240)}`, `Figma API request failed (${response.status}): ${body.slice(0, 240)}`));
   }
   return (await response.json()) as T;
 }
@@ -139,29 +140,30 @@ function flattenFigmaNodes(root: FigmaNode): DesignElement[] {
   return output;
 }
 
-export async function designFromFigma(url: string, token: string): Promise<DesignSource> {
-  if (!token.trim()) throw new Error("使用 Figma 链接时必须提供 Figma Access Token。");
-  const { fileKey, nodeId } = parseFigmaUrl(url);
+export async function designFromFigma(url: string, token: string, locale: Locale): Promise<DesignSource> {
+  if (!token.trim()) throw new Error(localText(locale, "使用 Figma 链接时必须提供 Figma Access Token。", "A Figma Access Token is required when using a Figma link."));
+  const { fileKey, nodeId } = parseFigmaUrl(url, locale);
   const encodedNodeId = encodeURIComponent(nodeId);
 
   const nodes = await figmaFetch<{
     name?: string;
     nodes?: Record<string, { document?: FigmaNode }>;
-  }>(`https://api.figma.com/v1/files/${fileKey}/nodes?ids=${encodedNodeId}`, token);
+  }>(`https://api.figma.com/v1/files/${fileKey}/nodes?ids=${encodedNodeId}`, token, locale);
   const root = nodes.nodes?.[nodeId]?.document;
-  if (!root?.absoluteBoundingBox) throw new Error("无法从 Figma 链接读取目标 Frame。");
+  if (!root?.absoluteBoundingBox) throw new Error(localText(locale, "无法从 Figma 链接读取目标 Frame。", "Unable to read the target Frame from the Figma link."));
 
   const rendered = await figmaFetch<{ images?: Record<string, string | null> }>(
     `https://api.figma.com/v1/images/${fileKey}?ids=${encodedNodeId}&format=png&scale=1&use_absolute_bounds=true`,
-    token
+    token,
+    locale
   );
   const imageUrl = rendered.images?.[nodeId];
-  if (!imageUrl) throw new Error("Figma 没有返回目标 Frame 的渲染图。");
+  if (!imageUrl) throw new Error(localText(locale, "Figma 没有返回目标 Frame 的渲染图。", "Figma did not return a rendered image for the target Frame."));
   const imageResponse = await fetch(imageUrl);
-  if (!imageResponse.ok) throw new Error("下载 Figma Frame 渲染图失败。");
+  if (!imageResponse.ok) throw new Error(localText(locale, "下载 Figma Frame 渲染图失败。", "Failed to download the rendered Figma Frame image."));
   const image = Buffer.from(await imageResponse.arrayBuffer());
   const metadata = await sharp(image).metadata();
-  if (!metadata.width || !metadata.height) throw new Error("无法读取 Figma 渲染图尺寸。");
+  if (!metadata.width || !metadata.height) throw new Error(localText(locale, "无法读取 Figma 渲染图尺寸。", "Unable to read the dimensions of the rendered Figma image."));
   const elements = flattenFigmaNodes(root);
 
   return {
@@ -169,25 +171,26 @@ export async function designFromFigma(url: string, token: string): Promise<Desig
     image,
     viewport: { width: metadata.width, height: metadata.height },
     elements,
-    diagnostics: [`已读取 ${elements.length} 个可比对 Figma 节点。`]
+    diagnostics: [localText(locale, `已读取 ${elements.length} 个可比对 Figma 节点。`, `Read ${elements.length} comparable Figma nodes.`)]
   };
 }
 
 export async function designFromImage(
   buffer: Buffer,
-  originalName: string
+  originalName: string,
+  locale: Locale
 ): Promise<DesignSource> {
   const metadata = await sharp(buffer).metadata();
-  if (!metadata.width || !metadata.height) throw new Error("无法读取上传图片的尺寸。");
+  if (!metadata.width || !metadata.height) throw new Error(localText(locale, "无法读取上传图片的尺寸。", "Unable to read the uploaded image dimensions."));
   if (metadata.width > 6000 || metadata.height > 6000) {
-    throw new Error("设计稿图片宽高不能超过 6000px。");
+    throw new Error(localText(locale, "设计稿图片宽高不能超过 6000px。", "The design image must not exceed 6000px in either dimension."));
   }
   const image = await sharp(buffer).ensureAlpha().png().toBuffer();
   return {
-    label: `上传图片 · ${originalName}`,
+    label: localText(locale, `上传图片 · ${originalName}`, `Uploaded image · ${originalName}`),
     image,
     viewport: { width: metadata.width, height: metadata.height },
     elements: [],
-    diagnostics: ["图片输入不包含 Figma 节点属性，将只执行视觉与 H5 静态规则比对。"]
+    diagnostics: [localText(locale, "图片输入不包含 Figma 节点属性，将只执行视觉与 H5 静态规则比对。", "Image input has no Figma node properties, so only visual and static H5 rules will be evaluated.")]
   };
 }
