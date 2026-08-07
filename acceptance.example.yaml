@@ -1,0 +1,40 @@
+# PROTOTYPE — 视觉验收规则，可根据误报与漏报持续调整
+viewport: auto
+
+thresholds:
+  visual_similarity_min: 0.95
+  pixel_threshold: 0.10
+  position_tolerance_px: 4
+  size_tolerance_px: 4
+  font_size_tolerance_px: 1
+  color_delta_e: 3
+  match_confidence_min: 0.72
+  high_confidence_min: 0.86
+
+rules:
+  visual_similarity: error
+  missing_element: error
+  extra_element: warning
+  position: error
+  size: error
+  content: error
+  typography: error
+  color: warning
+  decoration: warning
+  broken_image: error
+  horizontal_overflow: error
+  clipped_text: warning
+
+# 截图和 DOM 分析都会忽略这些选择器
+ignore:
+  # - "[data-dynamic]"
+  # - ".clock"
+
+# 这些 Figma node id 未匹配时必须失败
+critical_figma_nodes:
+  # - "123:456"
+
+capture:
+  timeout_ms: 10000
+  settle_ms: 500
+  # wait_for_selector: "[data-page-ready]"
