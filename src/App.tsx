@@ -112,7 +112,11 @@ function StepRail({ step }: { step: number }) {
         const active = item.number === step;
         const complete = item.number < step;
         return (
-          <div className={`step-item ${active ? "active" : ""} ${complete ? "complete" : ""}`} key={item.number}>
+          <div
+            className={`step-item ${active ? "active" : ""} ${complete ? "complete" : ""}`}
+            aria-current={active ? "step" : undefined}
+            key={item.number}
+          >
             <span className="step-index">{complete ? <Check size={14} /> : item.number}</span>
             <span>
               <b>{item.label}</b>
@@ -232,10 +236,10 @@ function SourceStep(props: {
             <div><h2>{t("source.design.title")}</h2><p>{t("source.design.description")}</p></div>
           </header>
           <div className="segmented" role="tablist" aria-label={t("source.design.aria")}>
-            <button className={props.designMode === "figma" ? "selected" : ""} onClick={() => props.setDesignMode("figma")}>
+            <button type="button" role="tab" aria-selected={props.designMode === "figma"} className={props.designMode === "figma" ? "selected" : ""} onClick={() => props.setDesignMode("figma")}>
               <Link2 size={15} /> Figma Frame
             </button>
-            <button className={props.designMode === "image" ? "selected" : ""} onClick={() => props.setDesignMode("image")}>
+            <button type="button" role="tab" aria-selected={props.designMode === "image"} className={props.designMode === "image" ? "selected" : ""} onClick={() => props.setDesignMode("image")}>
               <FileImage size={15} /> {t("source.design.upload")}
             </button>
           </div>
@@ -246,7 +250,10 @@ function SourceStep(props: {
               <small>{t("source.figma.help")}</small>
             </label>
           ) : (
-            <div
+            <>
+            <input ref={fileInput} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => props.setDesignFile(event.target.files?.[0])} />
+            <button
+              type="button"
               className={`upload-zone ${props.designFile ? "has-file" : ""}`}
               onClick={() => fileInput.current?.click()}
               onDragOver={(event) => event.preventDefault()}
@@ -255,10 +262,10 @@ function SourceStep(props: {
                 props.setDesignFile(event.dataTransfer.files[0]);
               }}
             >
-              <input ref={fileInput} type="file" hidden accept="image/png,image/jpeg,image/webp" onChange={(event) => props.setDesignFile(event.target.files?.[0])} />
               <span className="upload-icon"><UploadCloud size={20} /></span>
               {props.designFile ? <><b>{props.designFile.name}</b><small>{(props.designFile.size / 1024 / 1024).toFixed(2)} MB · {t("source.upload.replace")}</small></> : <><b>{t("source.upload.drop")}</b><small>{t("source.upload.help")}</small></>}
-            </div>
+            </button>
+            </>
           )}
         </article>
 
@@ -410,7 +417,7 @@ function LoadingReport({ stage }: { stage: number }) {
   const { t } = useI18n();
   const labels = [t("loading.prepare"), t("loading.capture"), t("loading.match"), t("loading.rules"), t("loading.report")];
   return (
-    <section className="loading-state">
+    <section className="loading-state" aria-live="polite" aria-busy="true">
       <div className="scan-orb"><span /><LoaderCircle size={34} /></div>
       <span className="mono-label">{t("loading.eyebrow")}</span>
       <h1>{labels[Math.min(stage, labels.length - 1)]}</h1>
@@ -442,10 +449,10 @@ function CompareViewer({ report, selectedIssue }: { report: CompareReport; selec
   return (
     <section className="viewer-card">
       <header className="viewer-toolbar">
-        <div className="segmented compact-segmented">
-          <button className={mode === "side" ? "selected" : ""} onClick={() => setMode("side")}><Eye size={14} />{t("viewer.side")}</button>
-          <button className={mode === "overlay" ? "selected" : ""} onClick={() => setMode("overlay")}><Layers3 size={14} />{t("viewer.overlay")}</button>
-          <button className={mode === "diff" ? "selected" : ""} onClick={() => setMode("diff")}><Flame size={14} />{t("viewer.diff")}</button>
+        <div className="segmented compact-segmented" role="tablist" aria-label={t("viewer.side")}>
+          <button type="button" role="tab" aria-selected={mode === "side"} className={mode === "side" ? "selected" : ""} onClick={() => setMode("side")}><Eye size={14} />{t("viewer.side")}</button>
+          <button type="button" role="tab" aria-selected={mode === "overlay"} className={mode === "overlay" ? "selected" : ""} onClick={() => setMode("overlay")}><Layers3 size={14} />{t("viewer.overlay")}</button>
+          <button type="button" role="tab" aria-selected={mode === "diff"} className={mode === "diff" ? "selected" : ""} onClick={() => setMode("diff")}><Flame size={14} />{t("viewer.diff")}</button>
         </div>
         <span className="viewport-badge">{report.viewport.width} × {report.viewport.height} · DPR 1</span>
       </header>
@@ -470,12 +477,12 @@ function IssueList(props: { report: CompareReport; selected?: Issue; onSelect: (
   return (
     <aside className="issue-panel">
       <header><div><span className="mono-label">{t("issues.eyebrow")}</span><h2>{t("issues.title")} <em>{props.report.issues.length}</em></h2></div><SlidersHorizontal size={17} /></header>
-      <div className="filter-row">{(["all", "error", "warning", "pending"] as const).map((value) => <button key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{value === "all" ? t("issues.all") : t(`severity.${value}`)}<span>{counts[value]}</span></button>)}</div>
+      <div className="filter-row">{(["all", "error", "warning", "pending"] as const).map((value) => <button type="button" aria-pressed={filter === value} key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{value === "all" ? t("issues.all") : t(`severity.${value}`)}<span>{counts[value]}</span></button>)}</div>
       <div className="issue-scroll">
         {issues.length === 0 && <div className="empty-issues"><CheckCircle2 size={24} /><b>{t("issues.empty")}</b></div>}
         {issues.map((issue) => {
           const Icon = severityIcons[issue.severity];
-          return <button className={`issue-row ${issue.severity} ${props.selected?.id === issue.id ? "selected" : ""}`} key={issue.id} onClick={() => props.onSelect(issue)}><span className="severity-icon"><Icon size={16} /></span><span className="issue-copy"><small>{issue.category} · {issue.id.replace("issue-", "#")}</small><b>{issue.title}</b><p>{issue.summary}</p>{issue.selector && <code>{issue.selector}</code>}<span className="suggestion"><ArrowRight size={13} />{issue.suggestion}</span></span>{typeof issue.confidence === "number" && <span className="confidence">{Math.round(issue.confidence * 100)}%</span>}</button>;
+          return <button type="button" aria-pressed={props.selected?.id === issue.id} className={`issue-row ${issue.severity} ${props.selected?.id === issue.id ? "selected" : ""}`} key={issue.id} onClick={() => props.onSelect(issue)}><span className="severity-icon"><Icon size={16} /></span><span className="issue-copy"><small>{issue.category} · {issue.id.replace("issue-", "#")}</small><b>{issue.title}</b><p>{issue.summary}</p>{issue.selector && <code>{issue.selector}</code>}<span className="suggestion"><ArrowRight size={13} />{issue.suggestion}</span></span>{typeof issue.confidence === "number" && <span className="confidence">{Math.round(issue.confidence * 100)}%</span>}</button>;
         })}
       </div>
     </aside>
@@ -619,11 +626,14 @@ export function App() {
 
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#main-content">{locale === "zh-CN" ? "跳到主要内容" : "Skip to main content"}</a>
       <header className="app-header"><a className="brand" href="/prototype/visual-qa"><span className="brand-mark"><i /><i /><i /><i /></span><span>DiffLab<small>{t("app.subtitle")}</small></span></a><StepRail step={step} /><div className="header-tools"><span className="prototype-pill">{t("app.prototype")}</span><div className="language-switch" role="group" aria-label={t("language.label")}><Globe2 size={14} /><button type="button" className={locale === "zh-CN" ? "active" : ""} aria-pressed={locale === "zh-CN"} onClick={() => setLocale("zh-CN")}>{t("language.zh")}</button><button type="button" className={locale === "en" ? "active" : ""} aria-pressed={locale === "en"} onClick={() => setLocale("en")}>{t("language.en")}</button></div></div></header>
       {error && <div className="error-banner"><XCircle size={17} /><span><b>{t("error.title")}</b>{error}</span><button onClick={() => setError("")}>{t("error.close")}</button></div>}
-      {step === 1 && <SourceStep designMode={designMode} setDesignMode={setDesignMode} figmaUrl={figmaUrl} setFigmaUrl={setFigmaUrl} h5Url={h5Url} setH5Url={setH5Url} designFile={designFile} setDesignFile={setDesignFile} figmaToken={figmaToken} setFigmaToken={setFigmaToken} openaiKey={openaiKey} setOpenaiKey={setOpenaiKey} openaiApiUrl={openaiApiUrl} setOpenaiApiUrl={setOpenaiApiUrl} openaiModel={openaiModel} setOpenaiModel={setOpenaiModel} aiModels={aiModels} setAiModels={setAiModels} modelsSourceUrl={modelsSourceUrl} setModelsSourceUrl={setModelsSourceUrl} useAi={useAi} setUseAi={setUseAi} onClearCredentials={clearCredentials} onContinue={() => setStep(2)} onDemo={() => run(true)} busy={busy} />}
-      {step === 2 && <RulesStep rulesYaml={rulesYaml} setRulesYaml={(value) => { rulesEdited.current = true; setRulesYaml(value); }} defaultYaml={defaultYaml} onBack={() => setStep(1)} onRun={() => run(false)} busy={busy} />}
-      {step === 3 && (busy || !report ? <LoadingReport stage={loadingStage} /> : <ReportStep report={report} onReset={reset} />)}
+      <main id="main-content" tabIndex={-1}>
+        {step === 1 && <SourceStep designMode={designMode} setDesignMode={setDesignMode} figmaUrl={figmaUrl} setFigmaUrl={setFigmaUrl} h5Url={h5Url} setH5Url={setH5Url} designFile={designFile} setDesignFile={setDesignFile} figmaToken={figmaToken} setFigmaToken={setFigmaToken} openaiKey={openaiKey} setOpenaiKey={setOpenaiKey} openaiApiUrl={openaiApiUrl} setOpenaiApiUrl={setOpenaiApiUrl} openaiModel={openaiModel} setOpenaiModel={setOpenaiModel} aiModels={aiModels} setAiModels={setAiModels} modelsSourceUrl={modelsSourceUrl} setModelsSourceUrl={setModelsSourceUrl} useAi={useAi} setUseAi={setUseAi} onClearCredentials={clearCredentials} onContinue={() => setStep(2)} onDemo={() => run(true)} busy={busy} />}
+        {step === 2 && <RulesStep rulesYaml={rulesYaml} setRulesYaml={(value) => { rulesEdited.current = true; setRulesYaml(value); }} defaultYaml={defaultYaml} onBack={() => setStep(1)} onRun={() => run(false)} busy={busy} />}
+        {step === 3 && (busy || !report ? <LoadingReport stage={loadingStage} /> : <ReportStep report={report} onReset={reset} />)}
+      </main>
       <footer className="app-footer"><span>DiffLab / 0.0.0-prototype</span><span>{t("app.footer")}</span></footer>
     </div>
   );

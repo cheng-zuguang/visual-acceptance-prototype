@@ -385,3 +385,173 @@ button:disabled { cursor: not-allowed; opacity: .42; }
   .report-body { grid-template-columns: minmax(0,1fr) 350px; }
   .metrics-grid { grid-template-columns: 1.35fr repeat(4,1fr); }
 }
+
+/* Responsive application shell ------------------------------------------------
+   The original prototype assumed a 1024px canvas. These overrides keep the
+   same visual language while allowing every workflow to reflow naturally. */
+
+html,
+body { min-width: 0; }
+
+html { scroll-behavior: smooth; }
+
+body { overflow-x: clip; }
+
+main { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+
+.visually-hidden:where(:not(:focus, :focus-within, :active)) {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip-path: inset(50%) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+.skip-link {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 100;
+  translate: 0 -160%;
+  padding: 10px 14px;
+  border-radius: 9px;
+  background: var(--ink);
+  color: #fff;
+  font-size: .8125rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.skip-link:focus { translate: 0; }
+
+.upload-zone {
+  width: 100%;
+  color: inherit;
+  cursor: pointer;
+}
+
+.segmented [role="tab"][aria-selected="true"],
+.filter-row button[aria-pressed="true"] { color: var(--ink); }
+
+.step-item[aria-current="step"] b { color: var(--ink); }
+
+@media (max-width: 980px) {
+  .app-header {
+    height: auto;
+    min-height: 72px;
+    grid-template-columns: 1fr auto;
+    gap: 12px 20px;
+    padding: 14px 24px;
+  }
+
+  .step-rail {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: stretch;
+    justify-content: center;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
+  }
+
+  .setup-grid,
+  .rules-layout { grid-template-columns: 1fr; }
+
+  .setup-grid { gap: 32px; padding: 44px 0 64px; }
+  .rules-layout { gap: 30px; padding: 40px 0 64px; }
+  .intro-block,
+  .rules-aside { position: static; padding: 0; }
+  .intro-block h1 { max-width: 12ch; }
+  .prototype-note { margin-top: 34px; }
+
+  .report-body { grid-template-columns: 1fr; }
+  .issue-panel { position: static; max-height: none; }
+  .issue-scroll { max-height: 620px; }
+  .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric-card.score { grid-column: 1 / -1; }
+}
+
+@media (max-width: 680px) {
+  .app-header { padding: 12px 16px; }
+  .brand small,
+  .prototype-pill,
+  .step-item small,
+  .step-item i { display: none; }
+
+  .brand > span:last-child { font-size: 1rem; }
+  .brand-mark { width: 27px; height: 27px; }
+  .header-tools { gap: 0; }
+  .language-switch { padding-left: 5px; }
+  .language-switch > svg { display: none; }
+
+  .step-rail { justify-content: space-between; }
+  .step-item { flex: 1; gap: 7px; }
+  .step-item + .step-item { justify-content: center; }
+  .step-item:last-child { justify-content: flex-end; }
+  .step-item > span:nth-child(2) { min-width: 0; }
+  .step-item b { font-size: .6875rem; white-space: nowrap; }
+  .step-index { width: 24px; height: 24px; flex: 0 0 auto; }
+
+  .workspace,
+  .report-workspace,
+  .error-banner { width: calc(100% - 32px); }
+
+  .setup-grid,
+  .rules-layout { padding: 34px 0 52px; }
+  .intro-block h1,
+  .rules-aside h1 { font-size: clamp(2.55rem, 13vw, 3.75rem); }
+  .intro-block > p,
+  .rules-aside > p { font-size: .9375rem; }
+  .prototype-note { margin-top: 28px; }
+
+  .form-card { padding: 20px; }
+  .card-heading { margin-bottom: 20px; }
+  .model-picker-row { grid-template-columns: 1fr; }
+  .fetch-models-button { width: 100%; }
+  .credential-cache-note { grid-template-columns: auto 1fr; }
+  .credential-cache-note button { grid-column: 2; justify-self: start; padding-left: 0; }
+
+  .editor-card > header,
+  .editor-card > footer,
+  .viewer-toolbar,
+  .report-hero { align-items: stretch; flex-direction: column; }
+  .editor-card > header { padding: 15px; gap: 14px; }
+  .editor-actions button { flex: 1; justify-content: center; }
+  .code-editor-shell { grid-template-columns: 38px minmax(0, 1fr); min-height: 520px; }
+  .code-editor-shell textarea { min-height: 520px; padding: 18px 14px; }
+  .editor-card > footer { padding: 16px; }
+  .footer-actions { justify-content: stretch; }
+  .footer-actions button { flex: 1; }
+
+  .report-workspace { padding-top: 18px; }
+  .report-hero { gap: 18px; }
+  .report-actions > * { flex: 1; }
+  .report-actions .ghost-button,
+  .report-actions .primary-button { width: 100%; }
+  .metrics-grid { grid-template-columns: 1fr 1fr; }
+  .metric-card { min-height: 112px; }
+  .metric-card.matched { grid-column: 1 / -1; }
+
+  .viewer-toolbar { height: auto; padding: 12px; gap: 10px; }
+  .compact-segmented { width: 100%; }
+  .compact-segmented button { min-width: 0; padding: 0 8px; font-size: .6875rem; }
+  .viewport-badge { align-self: flex-start; }
+  .side-view { grid-template-columns: 1fr; }
+  .opacity-control { grid-template-columns: 48px 1fr 68px; }
+  .filter-row { overflow-x: auto; grid-template-columns: repeat(4, minmax(72px, 1fr)); }
+
+  .app-footer { min-height: 52px; padding: 10px 16px; gap: 10px; flex-wrap: wrap; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}

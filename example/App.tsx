@@ -1,5 +1,17 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import {
+  Bookmark,
+  Download,
+  FilePlus2,
+  FolderPlus,
+  Info,
+  Pencil,
+  ScanLine,
+  Share2,
+  Trash2,
+  Upload
+} from "lucide-react";
 
 const assets = {
   home: "./assets/home.svg",
@@ -186,23 +198,92 @@ function Popover({ title, children, onClose }: { title: string; children: ReactN
   );
 }
 
-function AddDocumentModal({ onClose, onAdd }: { onClose: () => void; onAdd: (item: DocumentItem) => void }) {
-  const [fileName, setFileName] = useState("");
-  const [folder, setFolder] = useState("Property docs");
+type SheetContent =
+  | { kind: "add" }
+  | { kind: "document"; title: string };
+
+function ActionSheet({ content, onClose, onUpload }: { content: SheetContent; onClose: () => void; onUpload: (file: File) => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    dialog.showModal();
+    return () => {
+      if (dialog.open) dialog.close();
+    };
+  }, []);
+
+  const finish = () => {
+    dialogRef.current?.close();
+    onClose();
+  };
+
+  const addActions = [
+    { label: "Folder", icon: FolderPlus, action: finish },
+    { label: "Upload", icon: Upload, action: () => fileRef.current?.click() },
+    { label: "Scan doc", icon: ScanLine, action: finish },
+    { label: "Upload Doc", icon: FilePlus2, action: () => fileRef.current?.click() }
+  ];
+  const documentActions = [
+    { label: "Add to bookmark", icon: Bookmark },
+    { label: "Details", icon: Info },
+    { label: "Share", icon: Share2 },
+    { label: "Download", icon: Download },
+    { label: "Rename", icon: Pencil },
+    { label: "Remove", icon: Trash2, danger: true }
+  ];
+
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <div className="add-modal" role="dialog" aria-modal="true" aria-labelledby="add-document-title">
-        <div className="modal-heading"><div><span className="eyebrow">NEW FILE</span><h2 id="add-document-title">Add document</h2></div><button onClick={onClose} aria-label="Close">×</button></div>
-        <label className="file-drop">
-          <input type="file" accept=".pdf,.doc,.docx,.png,.jpg" onChange={(event) => setFileName(event.target.files?.[0]?.name ?? "")} />
-          <span className="file-plus">+</span>
-          <strong>{fileName || "Choose a file"}</strong>
-          <small>PDF, DOCX or image · up to 10MB</small>
-        </label>
-        <label className="modal-field"><span>Folder</span><select value={folder} onChange={(event) => setFolder(event.target.value)}>{initialFolders.map((item) => <option key={item.id}>{item.name}</option>)}</select></label>
-        <button className="modal-primary" disabled={!fileName} onClick={() => onAdd({ id: `${Date.now()}`, name: fileName, size: "0.8MB", type: folder })}>Add document</button>
+    <dialog
+      ref={dialogRef}
+      className={`action-sheet ${content.kind === "add" ? "add-sheet" : "document-sheet"}`}
+      aria-labelledby="sheet-title"
+      onCancel={(event) => { event.preventDefault(); finish(); }}
+      onClick={(event) => { if (event.target === event.currentTarget) finish(); }}
+    >
+      <div className="sheet-surface">
+        {content.kind === "add" ? (
+          <>
+            <h2 id="sheet-title" className="visually-hidden">Add document</h2>
+            <div className="add-action-grid">
+              {addActions.map(({ label, icon: Icon, action }, index) => (
+                <button type="button" autoFocus={index === 0} onClick={action} key={label}>
+                  <span><Icon size={21} strokeWidth={1.7} /></span>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <input
+              ref={fileRef}
+              className="visually-hidden"
+              type="file"
+              tabIndex={-1}
+              accept=".pdf,.doc,.docx,.png,.jpg"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) onUpload(file);
+              }}
+            />
+          </>
+        ) : (
+          <>
+            <h2 id="sheet-title">{content.title}</h2>
+            <div className="sheet-divider dotted" />
+            <div className="document-actions">
+              {documentActions.map(({ label, icon: Icon, danger }) => (
+                <button type="button" className={danger ? "danger" : ""} onClick={finish} key={label}>
+                  <Icon size={20} strokeWidth={1.7} />
+                  <span>{label}</span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+        <span className="home-indicator" aria-hidden="true" />
       </div>
-    </div>
+    </dialog>
   );
 }
 
@@ -214,7 +295,7 @@ export function App() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [menuId, setMenuId] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
-  const [modalOpen, setModalOpen] = useState(false);
+  const [sheet, setSheet] = useState<SheetContent | null>(null);
   const [documents, setDocuments] = useState(initialDocuments);
 
   const filteredFolders = useMemo(() => initialFolders.filter((item) => item.name.toLowerCase().includes(query.toLowerCase())), [query]);
@@ -223,10 +304,15 @@ export function App() {
     return showAll ? visible : visible.slice(0, 3);
   }, [documents, query, showAll]);
 
-  const handleAdd = (item: DocumentItem) => {
-    setDocuments((current) => [item, ...current]);
-    setModalOpen(false);
+  const handleUpload = (file: File) => {
+    setDocuments((current) => [{ id: `${Date.now()}`, name: file.name, size: `${Math.max(.1, file.size / 1024 / 1024).toFixed(1)}MB` }, ...current]);
+    setSheet(null);
     setShowAll(true);
+  };
+
+  const openItemMenu = (id: string, title: string) => {
+    setMenuId(id);
+    setSheet({ kind: "document", title });
   };
 
   return (
@@ -250,20 +336,19 @@ export function App() {
         <section className="content-area">
           <section className="folders-section" aria-labelledby="folders-title">
             <div className="section-heading"><h2 id="folders-title">Folders</h2><button className={`grid-toggle ${listMode ? "is-active" : ""}`} onClick={() => setListMode((value) => !value)} aria-label="Toggle folder layout"><IconImage src={assets.category} /></button></div>
-            <FolderList folders={filteredFolders} listMode={listMode} onMenu={(id) => setMenuId(menuId === id ? null : id)} />
+            <FolderList folders={filteredFolders} listMode={listMode} onMenu={(id) => openItemMenu(id, initialFolders.find((folder) => folder.id === id)?.name ?? "Folder")} />
           </section>
           <section className="activity-section" aria-labelledby="recent-title">
             <div className="section-heading"><h2 id="recent-title">Recent Activity</h2><button className="view-all" onClick={() => setShowAll((value) => !value)}>{showAll ? "Show Less" : "View All"}</button></div>
-            <div className="document-list">{filteredDocuments.map((item) => <DocumentRow item={item} onMenu={(id) => setMenuId(menuId === id ? null : id)} key={item.id} />)}</div>
+            <div className="document-list">{filteredDocuments.map((item) => <DocumentRow item={item} onMenu={(id) => openItemMenu(id, item.name)} key={item.id} />)}</div>
             {!filteredDocuments.length && <p className="no-results">No documents found.</p>}
           </section>
         </section>
 
-        {menuId && <div className="context-menu" onClick={(event) => event.stopPropagation()}><button onClick={() => setMenuId(null)}>Open</button><button onClick={() => setMenuId(null)}>Move to folder</button><button className="danger" onClick={() => setMenuId(null)}>Remove</button></div>}
-        <button className="floating-add" onClick={() => setModalOpen(true)} aria-label="Add document"><IconImage src={assets.plus} /></button>
+        <button className="floating-add" onClick={() => setSheet({ kind: "add" })} aria-label="Add document"><IconImage src={assets.plus} /></button>
         <BottomNav active="home" onChange={() => undefined} />
       </div>
-      {modalOpen && <AddDocumentModal onClose={() => setModalOpen(false)} onAdd={handleAdd} />}
+      {sheet && <ActionSheet content={sheet} onClose={() => { setSheet(null); setMenuId(null); }} onUpload={handleUpload} />}
     </main>
   );
 }

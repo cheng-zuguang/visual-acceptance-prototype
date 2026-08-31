@@ -28,6 +28,80 @@ interface FigmaNode {
   children?: FigmaNode[];
 }
 
+interface FigmaFetchOptions {
+  fetch?: typeof globalThis.fetch;
+  maxRetries?: number;
+  minRequestIntervalMs?: number;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+type FigmaFetch = <T>(url: string, token: string, locale: Locale) => Promise<T>;
+
+const DEFAULT_FIGMA_REQUEST_INTERVAL_MS = 1_000;
+const MAX_RETRY_DELAY_MS = 30_000;
+
+function retryDelayMs(response: Response, attempt: number, now: number): number {
+  const retryAfter = response.headers.get("Retry-After")?.trim();
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    const headerDelay = Number.isFinite(seconds)
+      ? seconds * 1_000
+      : Date.parse(retryAfter) - now;
+    if (Number.isFinite(headerDelay) && headerDelay >= 0) {
+      return headerDelay;
+    }
+  }
+
+  return Math.min(1_000 * 2 ** attempt, MAX_RETRY_DELAY_MS);
+}
+
+export function createFigmaFetch(options: FigmaFetchOptions = {}): FigmaFetch {
+  const fetchRequest = options.fetch ?? globalThis.fetch;
+  const maxRetries = options.maxRetries ?? 2;
+  const minRequestIntervalMs = options.minRequestIntervalMs ?? DEFAULT_FIGMA_REQUEST_INTERVAL_MS;
+  const now = options.now ?? Date.now;
+  const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  let nextRequestAt = 0;
+  let rateLimitBlockedUntil = 0;
+  let requestQueue = Promise.resolve();
+
+  async function requestOnce(url: string, token: string, attempt: number): Promise<Response> {
+    const request = requestQueue.then(async () => {
+      const waitMs = Math.max(0, nextRequestAt - now(), rateLimitBlockedUntil - now());
+      if (waitMs > 0) await sleep(waitMs);
+      nextRequestAt = now() + minRequestIntervalMs;
+
+      const response = await fetchRequest(url, { headers: { "X-Figma-Token": token } });
+      if (response.status === 429) {
+        rateLimitBlockedUntil = Math.max(
+          rateLimitBlockedUntil,
+          now() + retryDelayMs(response, attempt, now())
+        );
+      }
+      return response;
+    });
+    requestQueue = request.then(() => undefined, () => undefined);
+    return request;
+  }
+
+  return async function figmaFetch<T>(url: string, token: string, locale: Locale): Promise<T> {
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      const response = await requestOnce(url, token, attempt);
+      if (response.status === 429 && attempt < maxRetries) continue;
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(localText(locale, `Figma API 请求失败（${response.status}）：${body.slice(0, 240)}`, `Figma API request failed (${response.status}): ${body.slice(0, 240)}`));
+      }
+      return (await response.json()) as T;
+    }
+
+    throw new Error(localText(locale, "Figma API 请求重试失败。", "Figma API request retries failed."));
+  };
+}
+
+const figmaFetch = createFigmaFetch();
+
 function parseFigmaUrl(input: string, locale: Locale): { fileKey: string; nodeId: string } {
   let url: URL;
   try {
@@ -43,15 +117,6 @@ function parseFigmaUrl(input: string, locale: Locale): { fileKey: string; nodeId
   }
 
   return { fileKey: match[1], nodeId: rawNodeId.replace(/-/g, ":") };
-}
-
-async function figmaFetch<T>(url: string, token: string, locale: Locale): Promise<T> {
-  const response = await fetch(url, { headers: { "X-Figma-Token": token } });
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(localText(locale, `Figma API 请求失败（${response.status}）：${body.slice(0, 240)}`, `Figma API request failed (${response.status}): ${body.slice(0, 240)}`));
-  }
-  return (await response.json()) as T;
 }
 
 function colorFromPaint(paints?: Array<Record<string, unknown>>): string | undefined {
