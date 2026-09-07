@@ -15,6 +15,7 @@ import { createReport } from "./report";
 
 const app = express();
 const port = Number(process.env.PORT || 4318);
+const host = process.env.HOST || "0.0.0.0";
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024, files: 1 }
@@ -217,6 +218,7 @@ app.use(
   }
 );
 
-app.listen(port, "127.0.0.1", () => {
-  console.log(`DiffLab prototype server: http://127.0.0.1:${port}`);
+app.listen(port, host, () => {
+  const displayHost = host === "0.0.0.0" ? "127.0.0.1" : host;
+  console.log(`DiffLab prototype server: http://${displayHost}:${port}`);
 });

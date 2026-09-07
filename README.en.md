@@ -115,6 +115,27 @@ npm start
 
 Then open <http://127.0.0.1:4318/prototype/visual-qa>.
 
+### Run with Docker
+
+DiffLab includes Docker configurations with Playwright Chromium and CJK font support. Use Docker Compose to build and start with one command:
+
+```bash
+# 1. Copy and adjust environment variables (optional)
+cp .env.example .env
+
+# 2. Build and start the container
+docker compose up -d --build
+```
+
+Then navigate to <http://127.0.0.1:14318/prototype/visual-qa> (host port defaults to `14318` to avoid collision).
+
+Alternatively, using the Docker CLI directly:
+
+```bash
+docker build -t difflab:latest .
+docker run -d --name difflab --shm-size=1gb -p 14318:4318 difflab:latest
+```
+
 ## Documentation
 
 - [Architecture and comparison pipeline](./docs/ARCHITECTURE.en.md)

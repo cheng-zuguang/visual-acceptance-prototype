@@ -1,0 +1,21 @@
+services:
+  difflab:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: difflab:latest
+    container_name: difflab
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-14318}:4318"
+    environment:
+      - NODE_ENV=production
+      - PORT=4318
+      - HOST=0.0.0.0
+      - FIGMA_TOKEN=${FIGMA_TOKEN:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-}
+      - CHROMIUM_FLAGS=${CHROMIUM_FLAGS:-}
+    # Headless Chromium needs sufficient shared memory for heavy page renders
+    shm_size: "1gb"

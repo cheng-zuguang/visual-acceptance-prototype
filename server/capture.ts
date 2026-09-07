@@ -27,10 +27,13 @@ interface BrowserElement {
 }
 
 async function launchBrowser(): Promise<Browser> {
+  const args = process.env.CHROMIUM_FLAGS
+    ? process.env.CHROMIUM_FLAGS.split(/\s+/).filter(Boolean)
+    : ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"];
   try {
-    return await chromium.launch({ headless: true, channel: "chrome" });
+    return await chromium.launch({ headless: true, channel: "chrome", args });
   } catch {
-    return chromium.launch({ headless: true });
+    return chromium.launch({ headless: true, args });
   }
 }
 

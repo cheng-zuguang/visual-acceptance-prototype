@@ -115,6 +115,27 @@ npm start
 
 随后访问 <http://127.0.0.1:4318/prototype/visual-qa>。
 
+### 使用 Docker 运行
+
+DiffLab 提供了内置 Playwright Chromium 和中文字体支持的 Docker 镜像配置，推荐使用 Docker Compose 一键启动：
+
+```bash
+# 1. 复制并按需配置环境变量（可选）
+cp .env.example .env
+
+# 2. 构建并启动容器
+docker compose up -d --build
+```
+
+容器启动后访问 <http://127.0.0.1:14318/prototype/visual-qa>（宿主机暴露端口已配置为 `14318`，避免端口冲突）。
+
+也可以直接使用 Docker CLI：
+
+```bash
+docker build -t difflab:latest .
+docker run -d --name difflab --shm-size=1gb -p 14318:4318 difflab:latest
+```
+
 ## 文档导航
 
 - [架构与比对流程](./docs/ARCHITECTURE.md)
