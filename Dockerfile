@@ -7,6 +7,9 @@ FROM node:20-bookworm-slim AS builder
 
 WORKDIR /app
 
+# Accelerate npm downloads
+RUN npm config set registry https://registry.npmmirror.com
+
 # Install build dependencies
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -26,17 +29,22 @@ WORKDIR /app
 ENV NODE_ENV=production \
     PORT=4318 \
     HOST=0.0.0.0 \
-    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright
 
-# 1. Install CJK fonts (essential for accurate visual testing on Chinese pages)
-# 2. Install curl for container healthcheck
+# 1. Switch Debian source to domestic mirror for fast & resilient apt downloads
+# 2. Install lightweight CJK font (wqy-microhei ~10MB vs noto-cjk ~100MB) & required tools
 # 3. Create shared playwright browser directory
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    fonts-noto-cjk \
-    fonts-liberation \
-    fonts-freefont-ttf \
-    curl \
-    ca-certificates \
+RUN sed -i 's@deb.debian.org@mirrors.aliyun.com@g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true \
+    && sed -i 's@deb.debian.org@mirrors.aliyun.com@g' /etc/apt/sources.list 2>/dev/null || true \
+    && sed -i 's@security.debian.org@mirrors.aliyun.com@g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true \
+    && sed -i 's@security.debian.org@mirrors.aliyun.com@g' /etc/apt/sources.list 2>/dev/null || true \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        fonts-wqy-microhei \
+        fonts-wqy-zenhei \
+        fonts-liberation \
+        curl \
+        ca-certificates \
     && mkdir -p /ms-playwright \
     && chmod 777 /ms-playwright \
     && rm -rf /var/lib/apt/lists/*
@@ -44,8 +52,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy package descriptors
 COPY package.json package-lock.json ./
 
-# Install production dependencies and tsx, then install Playwright Chromium with OS libraries
-RUN npm ci --omit=dev \
+# Configure npmmirror registry, install production dependencies + Playwright Chromium
+RUN npm config set registry https://registry.npmmirror.com \
+    && npm ci --omit=dev \
     && npm install -g tsx \
     && npx playwright install --with-deps chromium \
     && apt-get clean \
