@@ -139,8 +139,10 @@ docker run -d --name difflab --shm-size=1gb -p 14318:4318 difflab:latest
 ## 文档导航
 
 - [架构与比对流程](./docs/ARCHITECTURE.md)
+- [AI UI 视觉走查需求与技术蓝图](./docs/AI_UI_REVIEW_BLUEPRINT.md)
 - [YAML 验收规则参考](./docs/ACCEPTANCE_RULES.md)
 - [HTTP API 参考](./docs/API.md)
+- [公共服务 API 设计草案](./docs/PUBLIC_API_DESIGN.md)
 - [开发、验证与故障排查](./docs/DEVELOPMENT.md)
 - [原型验证记录](./PROTOTYPE_NOTES.md)
 - [MIT License](./LICENSE)（[中文参考译本](./LICENSE.zh-CN.md)）
