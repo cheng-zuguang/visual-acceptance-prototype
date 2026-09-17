@@ -1,0 +1,50 @@
+groups:
+  - name: difflab-ai-advice-expected-targets-test
+    rules:
+      - record: difflab_ai_advice_metrics_expected_target_absent
+        expr: |
+          absent_over_time(
+            up{
+              job="difflab-ai-advice",
+              difflab_tenant="tenant-missing",
+              difflab_metrics="ai-advice",
+              difflab_target="instance-a"
+            }[5m]
+          )
+        labels:
+          job: difflab-ai-advice
+          difflab_tenant: tenant-missing
+          difflab_metrics: ai-advice
+          difflab_target: instance-a
+
+      - record: difflab_ai_advice_metrics_expected_target_absent
+        expr: |
+          absent_over_time(
+            up{
+              job="difflab-ai-advice",
+              difflab_tenant="tenant-present",
+              difflab_metrics="ai-advice",
+              difflab_target="instance-a"
+            }[5m]
+          )
+        labels:
+          job: difflab-ai-advice
+          difflab_tenant: tenant-present
+          difflab_metrics: ai-advice
+          difflab_target: instance-a
+
+      - record: difflab_ai_advice_metrics_expected_target_absent
+        expr: |
+          absent_over_time(
+            up{
+              job="difflab-ai-advice",
+              difflab_tenant="tenant-outage",
+              difflab_metrics="ai-advice",
+              difflab_target="instance-a"
+            }[5m]
+          )
+        labels:
+          job: difflab-ai-advice
+          difflab_tenant: tenant-outage
+          difflab_metrics: ai-advice
+          difflab_target: instance-a

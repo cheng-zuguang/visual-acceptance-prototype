@@ -1,0 +1,215 @@
+rule_files:
+  - prometheus-ai-advice-alerts.yml
+  - prometheus-ai-advice-expected-targets.test.yml
+
+evaluation_interval: 1m
+
+group_eval_order:
+  - difflab-ai-advice-recording
+  - difflab-ai-advice-alerts
+
+tests:
+  - name: aggregates counters across instances when one instance restarts
+    interval: 1m
+    input_series:
+      - series: 'ai_advice_attempts_total{job="difflab",difflab_tenant="tenant-a",instance="instance-a",pod="pod-a"}'
+        values: '0 2 4 6 8 10 0 2 4 6 8'
+      - series: 'ai_advice_attempts_total{job="difflab",difflab_tenant="tenant-a",instance="instance-b",pod="pod-b"}'
+        values: '0 1 2 3 4 5 6 7 8 9 10'
+      - series: 'ai_advice_rejections_total{job="difflab",difflab_tenant="tenant-a",instance="instance-a",pod="pod-a",code="ai_timeout"}'
+        values: '0 1 1 2 3 4 0 1 2 3 4'
+      - series: 'ai_advice_rejections_total{job="difflab",difflab_tenant="tenant-a",instance="instance-b",pod="pod-b",code="ai_timeout"}'
+        values: '0+0x10'
+      - series: 'ai_advice_alert_threshold_ratio{job="difflab",difflab_tenant="tenant-a",instance="instance-a",pod="pod-a",type="timeout_rate"}'
+        values: '0.3+0x10'
+      - series: 'ai_advice_alert_min_attempts{job="difflab",difflab_tenant="tenant-a",instance="instance-a",pod="pod-a"}'
+        values: '10+0x10'
+
+    promql_expr_test:
+      - expr: 'ai_advice_cluster_window_attempts{job="difflab",difflab_tenant="tenant-a",window="5m"}'
+        eval_time: 10m
+        exp_samples:
+          - labels: 'ai_advice_cluster_window_attempts{job="difflab",difflab_tenant="tenant-a",window="5m"}'
+            value: 13
+
+      - expr: 'ai_advice_cluster_window_timeout_ratio{job="difflab",difflab_tenant="tenant-a",window="5m"}'
+        eval_time: 10m
+        exp_samples:
+          - labels: 'ai_advice_cluster_window_timeout_ratio{job="difflab",difflab_tenant="tenant-a",window="5m"}'
+            value: 0.3076923076923077
+
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DiffLabAiAdviceTimeoutRateHigh5m
+        exp_alerts:
+          - exp_labels:
+              difflab_tenant: tenant-a
+              job: difflab
+              severity: warning
+              window: 5m
+            exp_annotations:
+              summary: DiffLab AI advice timeout rate is high in the last 5 minutes
+              description: Aggregated timeout attempts across DiffLab instances exceeded the configured threshold and minimum sample gate.
+
+  - name: keeps ratios at zero and alerts silent when there is no AI advice traffic
+    interval: 1m
+    input_series:
+      - series: 'up{job="difflab-ai-advice",difflab_tenant="tenant-idle",difflab_metrics="ai-advice",instance="instance-a",pod="pod-a"}'
+        values: '1+0x15'
+      - series: 'ai_advice_attempts_total{job="difflab",difflab_tenant="tenant-idle",instance="instance-a",pod="pod-a"}'
+        values: '0+0x15'
+      - series: 'ai_advice_rejections_total{job="difflab",difflab_tenant="tenant-idle",instance="instance-a",pod="pod-a",code="ai_timeout"}'
+        values: '0+0x15'
+      - series: 'ai_advice_evidence_dangling_attempts_total{job="difflab",difflab_tenant="tenant-idle",instance="instance-a",pod="pod-a"}'
+        values: '0+0x15'
+      - series: 'ai_advice_alert_threshold_ratio{job="difflab",difflab_tenant="tenant-idle",instance="instance-a",pod="pod-a",type="timeout_rate"}'
+        values: '0.01+0x15'
+      - series: 'ai_advice_alert_threshold_ratio{job="difflab",difflab_tenant="tenant-idle",instance="instance-a",pod="pod-a",type="evidence_dangling_rate"}'
+        values: '0.01+0x15'
+      - series: 'ai_advice_alert_min_attempts{job="difflab",difflab_tenant="tenant-idle",instance="instance-a",pod="pod-a"}'
+        values: '1+0x15'
+
+    promql_expr_test:
+      - expr: 'ai_advice_cluster_window_timeout_ratio{job="difflab",difflab_tenant="tenant-idle"}'
+        eval_time: 15m
+        exp_samples:
+          - labels: 'ai_advice_cluster_window_timeout_ratio{job="difflab",difflab_tenant="tenant-idle",window="5m"}'
+            value: 0
+          - labels: 'ai_advice_cluster_window_timeout_ratio{job="difflab",difflab_tenant="tenant-idle",window="15m"}'
+            value: 0
+
+      - expr: 'ai_advice_cluster_window_evidence_dangling_ratio{job="difflab",difflab_tenant="tenant-idle"}'
+        eval_time: 15m
+        exp_samples:
+          - labels: 'ai_advice_cluster_window_evidence_dangling_ratio{job="difflab",difflab_tenant="tenant-idle",window="5m"}'
+            value: 0
+          - labels: 'ai_advice_cluster_window_evidence_dangling_ratio{job="difflab",difflab_tenant="tenant-idle",window="15m"}'
+            value: 0
+
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: DiffLabAiAdviceMetricsScrapeDown
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: DiffLabAiAdviceTimeoutRateHigh5m
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: DiffLabAiAdviceTimeoutRateHigh15m
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: DiffLabAiAdviceEvidenceDanglingRateHigh5m
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: DiffLabAiAdviceEvidenceDanglingRateHigh15m
+        exp_alerts: []
+
+  - name: fires five and fifteen minute alerts when the ratio equals the configured threshold
+    interval: 1m
+    input_series:
+      - series: 'ai_advice_attempts_total{job="difflab",difflab_tenant="tenant-boundary",instance="instance-a",pod="pod-a"}'
+        values: '0+5x15'
+      - series: 'ai_advice_rejections_total{job="difflab",difflab_tenant="tenant-boundary",instance="instance-a",pod="pod-a",code="ai_timeout"}'
+        values: '0+1x15'
+      - series: 'ai_advice_evidence_dangling_attempts_total{job="difflab",difflab_tenant="tenant-boundary",instance="instance-a",pod="pod-a"}'
+        values: '0+0x15'
+      - series: 'ai_advice_alert_threshold_ratio{job="difflab",difflab_tenant="tenant-boundary",instance="instance-a",pod="pod-a",type="timeout_rate"}'
+        values: '0.2+0x15'
+      - series: 'ai_advice_alert_threshold_ratio{job="difflab",difflab_tenant="tenant-boundary",instance="instance-a",pod="pod-a",type="evidence_dangling_rate"}'
+        values: '0.1+0x15'
+      - series: 'ai_advice_alert_min_attempts{job="difflab",difflab_tenant="tenant-boundary",instance="instance-a",pod="pod-a"}'
+        values: '10+0x15'
+
+    promql_expr_test:
+      - expr: 'ai_advice_cluster_window_timeout_ratio{job="difflab",difflab_tenant="tenant-boundary"}'
+        eval_time: 7m
+        exp_samples:
+          - labels: 'ai_advice_cluster_window_timeout_ratio{job="difflab",difflab_tenant="tenant-boundary",window="5m"}'
+            value: 0.2
+          - labels: 'ai_advice_cluster_window_timeout_ratio{job="difflab",difflab_tenant="tenant-boundary",window="15m"}'
+            value: 0.2
+
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: DiffLabAiAdviceTimeoutRateHigh5m
+        exp_alerts:
+          - exp_labels:
+              difflab_tenant: tenant-boundary
+              job: difflab
+              severity: warning
+              window: 5m
+            exp_annotations:
+              summary: DiffLab AI advice timeout rate is high in the last 5 minutes
+              description: Aggregated timeout attempts across DiffLab instances exceeded the configured threshold and minimum sample gate.
+
+      - eval_time: 7m
+        alertname: DiffLabAiAdviceTimeoutRateHigh15m
+        exp_alerts:
+          - exp_labels:
+              difflab_tenant: tenant-boundary
+              job: difflab
+              severity: critical
+              window: 15m
+            exp_annotations:
+              summary: DiffLab AI advice timeout rate remains high over 15 minutes
+              description: Aggregated timeout attempts across DiffLab instances remain above the configured threshold and minimum sample gate.
+
+  - name: alerts when a tenant metrics target is not scraped for two minutes
+    interval: 1m
+    input_series:
+      - series: 'up{job="difflab-ai-advice",difflab_tenant="tenant-outage",difflab_metrics="ai-advice",difflab_target="instance-a",instance="instance-a",pod="pod-a"}'
+        values: '1 1 0 0 0'
+      - series: 'up{job="difflab-ai-advice",difflab_tenant="tenant-outage",difflab_metrics="ai-advice",instance="instance-b",pod="pod-b"}'
+        values: '1+0x4'
+      - series: 'up{job="difflab-ai-advice",difflab_tenant="tenant-missing",difflab_metrics="ai-advice",difflab_target="instance-a",instance="instance-a",pod="pod-a"}'
+        values: '1+0x4'
+      - series: 'up{job="difflab-ai-advice",difflab_tenant="tenant-present",difflab_metrics="ai-advice",difflab_target="instance-a",instance="instance-a",pod="pod-a"}'
+        values: '1+0x4'
+
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: DiffLabAiAdviceMetricsScrapeDown
+        exp_alerts:
+          - exp_labels:
+              difflab_metrics: ai-advice
+              difflab_tenant: tenant-outage
+              job: difflab-ai-advice
+              severity: critical
+            exp_annotations:
+              summary: DiffLab AI advice metrics scraping is unavailable
+              description: At least one configured DiffLab metrics target for this tenant has failed every scrape for more than 2 minutes.
+
+      - eval_time: 4m
+        alertname: DiffLabAiAdviceMetricsTargetAbsent
+        exp_alerts: []
+
+  - name: alerts when an expected tenant target disappears from service discovery
+    interval: 1m
+    input_series:
+      - series: 'up{job="difflab-ai-advice",difflab_tenant="tenant-missing",difflab_metrics="ai-advice",difflab_target="instance-a",instance="instance-a",pod="pod-a"}'
+        values: '1 1 _x8'
+      - series: 'up{job="difflab-ai-advice",difflab_tenant="tenant-present",difflab_metrics="ai-advice",difflab_target="instance-a",instance="instance-a",pod="pod-a"}'
+        values: '1+0x9'
+      - series: 'up{job="difflab-ai-advice",difflab_tenant="tenant-outage",difflab_metrics="ai-advice",difflab_target="instance-a",instance="instance-a",pod="pod-a"}'
+        values: '1+0x9'
+
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: DiffLabAiAdviceMetricsTargetAbsent
+        exp_alerts: []
+
+      - eval_time: 9m
+        alertname: DiffLabAiAdviceMetricsTargetAbsent
+        exp_alerts:
+          - exp_labels:
+              difflab_metrics: ai-advice
+              difflab_tenant: tenant-missing
+              difflab_target: instance-a
+              job: difflab-ai-advice
+              severity: critical
+            exp_annotations:
+              summary: DiffLab AI advice metrics target disappeared from discovery
+              description: An expected tenant metrics target has no Prometheus up sample in the current 5-minute lookup window.
+
+      - eval_time: 9m
+        alertname: DiffLabAiAdviceMetricsScrapeDown
+        exp_alerts: []

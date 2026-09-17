@@ -1,0 +1,141 @@
+groups:
+  - name: difflab-ai-advice-recording
+    rules:
+      - record: ai_advice_cluster_window_attempts
+        expr: sum without(instance, pod) (increase(ai_advice_attempts_total[5m]))
+        labels:
+          window: 5m
+
+      - record: ai_advice_cluster_window_attempts
+        expr: sum without(instance, pod) (increase(ai_advice_attempts_total[15m]))
+        labels:
+          window: 15m
+
+      - record: ai_advice_cluster_window_rejections
+        expr: sum without(instance, pod) (increase(ai_advice_rejections_total[5m]))
+        labels:
+          window: 5m
+
+      - record: ai_advice_cluster_window_rejections
+        expr: sum without(instance, pod) (increase(ai_advice_rejections_total[15m]))
+        labels:
+          window: 15m
+
+      - record: ai_advice_cluster_window_evidence_dangling_attempts
+        expr: sum without(instance, pod) (increase(ai_advice_evidence_dangling_attempts_total[5m]))
+        labels:
+          window: 5m
+
+      - record: ai_advice_cluster_window_evidence_dangling_attempts
+        expr: sum without(instance, pod) (increase(ai_advice_evidence_dangling_attempts_total[15m]))
+        labels:
+          window: 15m
+
+      - record: ai_advice_cluster_window_timeout_ratio
+        expr: |
+          sum without(code) (ai_advice_cluster_window_rejections{code="ai_timeout"})
+          /
+          clamp_min(ai_advice_cluster_window_attempts, 1)
+
+      - record: ai_advice_cluster_window_evidence_dangling_ratio
+        expr: |
+          ai_advice_cluster_window_evidence_dangling_attempts
+          /
+          clamp_min(ai_advice_cluster_window_attempts, 1)
+
+      - record: ai_advice_cluster_alert_threshold_ratio
+        expr: max without(instance, pod) (ai_advice_alert_threshold_ratio)
+
+      - record: ai_advice_cluster_alert_min_attempts
+        expr: max without(instance, pod) (ai_advice_alert_min_attempts)
+
+  - name: difflab-ai-advice-alerts
+    rules:
+      - alert: DiffLabAiAdviceMetricsTargetAbsent
+        expr: difflab_ai_advice_metrics_expected_target_absent == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: DiffLab AI advice metrics target disappeared from discovery
+          description: An expected tenant metrics target has no Prometheus up sample in the current 5-minute lookup window.
+
+      - alert: DiffLabAiAdviceMetricsScrapeDown
+        expr: |
+          sum by(job, difflab_tenant, difflab_metrics) (
+            up{difflab_metrics="ai-advice"} == bool 0
+          ) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: DiffLab AI advice metrics scraping is unavailable
+          description: At least one configured DiffLab metrics target for this tenant has failed every scrape for more than 2 minutes.
+
+      - alert: DiffLabAiAdviceTimeoutRateHigh5m
+        expr: |
+          (ai_advice_cluster_window_timeout_ratio{window="5m"}
+            >= on(job, difflab_tenant) group_left
+            ai_advice_cluster_alert_threshold_ratio{type="timeout_rate"})
+          and
+          (ai_advice_cluster_window_attempts{window="5m"}
+            >= on(job, difflab_tenant) group_left
+            ai_advice_cluster_alert_min_attempts)
+        for: 2m
+        labels:
+          severity: warning
+          window: 5m
+        annotations:
+          summary: DiffLab AI advice timeout rate is high in the last 5 minutes
+          description: Aggregated timeout attempts across DiffLab instances exceeded the configured threshold and minimum sample gate.
+
+      - alert: DiffLabAiAdviceTimeoutRateHigh15m
+        expr: |
+          (ai_advice_cluster_window_timeout_ratio{window="15m"}
+            >= on(job, difflab_tenant) group_left
+            ai_advice_cluster_alert_threshold_ratio{type="timeout_rate"})
+          and
+          (ai_advice_cluster_window_attempts{window="15m"}
+            >= on(job, difflab_tenant) group_left
+            ai_advice_cluster_alert_min_attempts)
+        for: 5m
+        labels:
+          severity: critical
+          window: 15m
+        annotations:
+          summary: DiffLab AI advice timeout rate remains high over 15 minutes
+          description: Aggregated timeout attempts across DiffLab instances remain above the configured threshold and minimum sample gate.
+
+      - alert: DiffLabAiAdviceEvidenceDanglingRateHigh5m
+        expr: |
+          (ai_advice_cluster_window_evidence_dangling_ratio{window="5m"}
+            >= on(job, difflab_tenant) group_left
+            ai_advice_cluster_alert_threshold_ratio{type="evidence_dangling_rate"})
+          and
+          (ai_advice_cluster_window_attempts{window="5m"}
+            >= on(job, difflab_tenant) group_left
+            ai_advice_cluster_alert_min_attempts)
+        for: 2m
+        labels:
+          severity: warning
+          window: 5m
+        annotations:
+          summary: DiffLab AI advice dangling-evidence rate is high in the last 5 minutes
+          description: Aggregated dangling-evidence attempts across DiffLab instances exceeded the configured threshold and minimum sample gate.
+
+      - alert: DiffLabAiAdviceEvidenceDanglingRateHigh15m
+        expr: |
+          (ai_advice_cluster_window_evidence_dangling_ratio{window="15m"}
+            >= on(job, difflab_tenant) group_left
+            ai_advice_cluster_alert_threshold_ratio{type="evidence_dangling_rate"})
+          and
+          (ai_advice_cluster_window_attempts{window="15m"}
+            >= on(job, difflab_tenant) group_left
+            ai_advice_cluster_alert_min_attempts)
+        for: 5m
+        labels:
+          severity: critical
+          window: 15m
+        annotations:
+          summary: DiffLab AI advice dangling-evidence rate remains high over 15 minutes
+          description: Aggregated dangling-evidence attempts across DiffLab instances remain above the configured threshold and minimum sample gate.

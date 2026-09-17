@@ -1,0 +1,6 @@
+# Copy this file into deployment configuration and list every expected scrape
+# target. Values are controlled deployment identifiers, never request content.
+targets:
+  - job: difflab-ai-advice
+    tenant: default
+    target: difflab-default-1
