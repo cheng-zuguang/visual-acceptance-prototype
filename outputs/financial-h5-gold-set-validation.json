@@ -1,0 +1,36 @@
+{
+  "valid": true,
+  "readiness": "needs-human-review",
+  "errors": [],
+  "warnings": [
+    "1 sample(s) still require designer approval.",
+    "1 sample(s) are not approved for test reuse.",
+    "Missing evidence modes: screenshot, hybrid.",
+    "Missing scenarios: market-variant-down, market-variant-flat, async-loading."
+  ],
+  "summary": {
+    "totalSamples": 1,
+    "approvedSamples": 0,
+    "reusableSamples": 0
+  },
+  "coverage": {
+    "modes": [
+      "live"
+    ],
+    "scenarios": [
+      "market-list",
+      "market-value",
+      "market-variant-up",
+      "static-region"
+    ],
+    "missingModes": [
+      "screenshot",
+      "hybrid"
+    ],
+    "missingScenarios": [
+      "market-variant-down",
+      "market-variant-flat",
+      "async-loading"
+    ]
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "schemaVersion": "1.0",
+  "datasetId": "financial-h5-v1",
+  "samples": [
+    {
+      "id": "fed-observer-live-draft",
+      "pageFrameGroupId": "fed-observer-0-72",
+      "approval": {
+        "status": "draft"
+      },
+      "dataPolicy": {
+        "classification": "public",
+        "reusableInTests": false
+      },
+      "design": {
+        "figmaUrl": "https://www.figma.com/design/lcSLaK6F1Popux1v8Vq31L/%E7%BE%8E%E8%81%94%E5%82%A8%E8%A7%82%E5%AF%9F?node-id=0-72",
+        "frameId": "0:72"
+      },
+      "actual": {
+        "mode": "live",
+        "h5Url": "https://luna.gtjaf.cc:30443/market-helper/fed?template_id=1401",
+        "viewport": {
+          "width": 375,
+          "height": 2370,
+          "dpr": 1
+        }
+      },
+      "reviewJson": "./reviews/fed-observer-live-2026-09-11-fallback.json",
+      "coverage": [
+        "market-value",
+        "market-list",
+        "market-variant-up",
+        "static-region"
+      ],
+      "expectedIssues": [
+        {
+          "id": "missing-module:0:286",
+          "location": "投票模块",
+          "category": "structure",
+          "designValue": "存在投票进行中、选项 A/B、参与人数与投票按钮组成的完整卡片",
+          "actualValue": "开发页面未出现对应投票卡片",
+          "priority": "P1"
+        }
+      ],
+      "pageAlignmentLabels": [],
+      "missingModuleLabels": [
+        {
+          "designParentFigmaNodeId": "0:286",
+          "regionIndex": 8,
+          "label": "correct",
+          "reason": "Figma 中存在完整投票卡片，H5 对应页面未出现该业务模块；重新走查后候选已形成 340px 设计流缺口、273px 位移阶跃和 67px 残差，属于当前残差阈值导致的漏报。"
+        },
+        {
+          "designParentFigmaNodeId": "0:210",
+          "regionIndex": 5,
+          "label": "false_positive",
+          "reason": "该导航栏属于承载 H5 的原生页面壳层，不在本次 H5 链接内容区的实现责任范围；不能将网页 DOM 中不存在原生导航作为 H5 结构缺失。"
+        }
+      ],
+      "allowedDynamics": [
+        {
+          "id": "fed-countdown",
+          "location": "利率观察/下次议息决议倒计时",
+          "type": "countdown",
+          "reason": "天、小时和分钟随采集时间变化，不应按文本差异报告；布局、字号、颜色和稳定性仍需检查"
+        },
+        {
+          "id": "fed-rate-probabilities",
+          "location": "利率观察/未来利率预测",
+          "type": "market-value",
+          "reason": "利率区间、最新概率、上一日概率和上周概率可随行情变化，不应要求文本值与设计占位值一致"
+        },
+        {
+          "id": "fed-related-products",
+          "location": "相关品种动态",
+          "type": "market-value",
+          "reason": "合约价格、涨跌幅、模拟收益率和模拟盈利为实时数据；语义 Variant 与视觉样式仍需匹配"
+        },
+        {
+          "id": "fed-news-feed",
+          "location": "最新资讯",
+          "type": "async-list",
+          "reason": "资讯标题、来源、发布时间和列表长度为异步内容，不应逐字匹配；列表模板和间距仍需检查"
+        }
+      ]
+    }
+  ]
+}
