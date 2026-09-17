@@ -11,14 +11,30 @@ thresholds:
   match_confidence_min: 0.72
   high_confidence_min: 0.86
 
+page_alignment:
+  missing_module:
+    minimum_horizontal_overlap_ratio: 0.50
+    maximum_residual_ratio: 0.15
+  confidence:
+    weights:
+      stability_coverage: 0.25
+      anchor_sufficiency: 0.20
+      inlier_ratio: 0.30
+      residual_quality: 0.15
+      dynamic_cleanliness: 0.05
+      structural_support: 0.05
+    levels:
+      high_min: 0.86
+      medium_min: 0.72
+      low_min: 0
+
 rules:
   visual_similarity: error
-  missing_element: error
-  extra_element: warning
   position: error
   size: error
   content: error
   typography: error
+  alignment: error
   color: warning
   decoration: warning
   broken_image: error
@@ -30,11 +46,9 @@ ignore:
   # - "[data-dynamic]"
   # - ".clock"
 
-# 这些 Figma node id 未匹配时必须失败
-critical_figma_nodes:
-  # - "123:456"
-
 capture:
-  timeout_ms: 10000
+  timeout_ms: 30000
   settle_ms: 500
+  samples: 3
+  sample_interval_ms: 750
   # wait_for_selector: "[data-page-ready]"

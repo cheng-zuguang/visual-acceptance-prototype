@@ -1,14 +1,16 @@
 import sharp from "sharp";
-import type { Box, DesignElement, ElementStyle } from "../src/types";
+import type {
+  Box,
+  DesignComponentEvidence,
+  DesignComponentProperty,
+  DesignComponentPropertyDefinition,
+  DesignLayout,
+  DesignStyleEvidence,
+  DesignTruthNode,
+  ElementStyle,
+  FigmaDesignTruth
+} from "../src/types";
 import { localText, type Locale } from "./i18n";
-
-export interface DesignSource {
-  label: string;
-  image: Buffer;
-  viewport: { width: number; height: number };
-  elements: DesignElement[];
-  diagnostics: string[];
-}
 
 interface FigmaNode {
   id: string;
@@ -25,7 +27,39 @@ interface FigmaNode {
   cornerRadius?: number;
   rectangleCornerRadii?: number[];
   effects?: Array<Record<string, unknown>>;
+  layoutMode?: string;
+  itemSpacing?: number;
+  paddingTop?: number;
+  paddingRight?: number;
+  paddingBottom?: number;
+  paddingLeft?: number;
+  textAutoResize?: string;
+  layoutSizingHorizontal?: string;
+  layoutSizingVertical?: string;
+  layoutWrap?: string;
+  primaryAxisSizingMode?: string;
+  counterAxisSizingMode?: string;
+  primaryAxisAlignItems?: string;
+  counterAxisAlignItems?: string;
+  counterAxisAlignContent?: string;
+  counterAxisSpacing?: number;
+  layoutAlign?: string;
+  layoutGrow?: number;
+  layoutPositioning?: string;
+  itemReverseZIndex?: boolean;
+  strokesIncludedInLayout?: boolean;
+  styles?: Record<string, string>;
+  componentId?: string;
+  componentSetId?: string;
+  variantProperties?: Record<string, string>;
+  componentProperties?: Record<string, DesignComponentProperty>;
+  componentPropertyDefinitions?: Record<string, DesignComponentPropertyDefinition>;
   children?: FigmaNode[];
+}
+
+export interface DesignTruthDependencies {
+  requestJson?: (url: string, token: string, locale: Locale) => Promise<unknown>;
+  fetchImage?: typeof globalThis.fetch;
 }
 
 interface FigmaFetchOptions {
@@ -146,6 +180,10 @@ function nodeStyle(node: FigmaNode): ElementStyle {
     fontWeight: typeof style.fontWeight === "number" ? style.fontWeight : undefined,
     lineHeight: typeof style.lineHeightPx === "number" ? style.lineHeightPx : undefined,
     letterSpacing: typeof style.letterSpacing === "number" ? style.letterSpacing : undefined,
+    textAlign:
+      typeof style.textAlignHorizontal === "string"
+        ? style.textAlignHorizontal.toLowerCase()
+        : undefined,
     borderColor: colorFromPaint(node.strokes),
     borderWidth: typeof node.strokeWeight === "number" ? node.strokeWeight : undefined,
     borderRadius:
@@ -162,100 +200,212 @@ function nodeStyle(node: FigmaNode): ElementStyle {
   };
 }
 
-function flattenFigmaNodes(root: FigmaNode): DesignElement[] {
-  const rootBox = root.absoluteBoundingBox;
-  if (!rootBox) return [];
-  const rootX = rootBox.x;
-  const rootY = rootBox.y;
-  const output: DesignElement[] = [];
-
-  function visit(node: FigmaNode): void {
-    if (node.visible === false) return;
-    const box = node.absoluteBoundingBox;
-    const hasVisualStyle = Boolean(
-      colorFromPaint(node.fills) || colorFromPaint(node.strokes) || node.effects?.length
-    );
-    const isUseful =
-      node.id !== root.id &&
-      box &&
-      (node.type === "TEXT" ||
-        !node.children?.length ||
-        hasVisualStyle ||
-        /button|input|logo|icon|按钮|输入|图标/i.test(node.name ?? ""));
-
-    if (isUseful && box && output.length < 1200) {
-      output.push({
-        id: node.id,
-        name: node.name ?? node.type ?? node.id,
-        type: node.type ?? "UNKNOWN",
-        text: node.characters?.trim() || undefined,
-        box: {
-          x: box.x - rootX,
-          y: box.y - rootY,
-          width: box.width,
-          height: box.height
-        },
-        style: nodeStyle(node)
-      });
-    }
-    node.children?.forEach(visit);
-  }
-
-  visit(root);
-  return output;
+function nodeLayout(node: FigmaNode): DesignLayout | undefined {
+  const entries = Object.entries({
+    mode: node.layoutMode,
+    textAutoResize: node.textAutoResize,
+    sizingHorizontal: node.layoutSizingHorizontal,
+    sizingVertical: node.layoutSizingVertical,
+    wrap: node.layoutWrap,
+    primaryAxisSizing: node.primaryAxisSizingMode,
+    counterAxisSizing: node.counterAxisSizingMode,
+    primaryAxisAlign: node.primaryAxisAlignItems,
+    counterAxisAlign: node.counterAxisAlignItems,
+    counterAxisAlignContent: node.counterAxisAlignContent,
+    itemSpacing: node.itemSpacing,
+    counterAxisSpacing: node.counterAxisSpacing,
+    paddingTop: node.paddingTop,
+    paddingRight: node.paddingRight,
+    paddingBottom: node.paddingBottom,
+    paddingLeft: node.paddingLeft,
+    align: node.layoutAlign,
+    grow: node.layoutGrow,
+    positioning: node.layoutPositioning,
+    reverseZIndex: node.itemReverseZIndex,
+    strokesIncluded: node.strokesIncludedInLayout
+  }).filter(([, value]) => value !== undefined);
+  return entries.length ? Object.fromEntries(entries) as DesignLayout : undefined;
 }
 
-export async function designFromFigma(url: string, token: string, locale: Locale): Promise<DesignSource> {
-  if (!token.trim()) throw new Error(localText(locale, "使用 Figma 链接时必须提供 Figma Access Token。", "A Figma Access Token is required when using a Figma link."));
-  const { fileKey, nodeId } = parseFigmaUrl(url, locale);
-  const encodedNodeId = encodeURIComponent(nodeId);
+function nodeStyleEvidence(node: FigmaNode): DesignStyleEvidence | undefined {
+  const entries = Object.entries({
+    styleIds: node.styles,
+    fills: node.fills,
+    strokes: node.strokes,
+    effects: node.effects
+  }).filter(([, value]) => value !== undefined);
+  return entries.length ? Object.fromEntries(entries) as DesignStyleEvidence : undefined;
+}
 
-  const nodes = await figmaFetch<{
-    name?: string;
-    nodes?: Record<string, { document?: FigmaNode }>;
-  }>(`https://api.figma.com/v1/files/${fileKey}/nodes?ids=${encodedNodeId}`, token, locale);
-  const root = nodes.nodes?.[nodeId]?.document;
-  if (!root?.absoluteBoundingBox) throw new Error(localText(locale, "无法从 Figma 链接读取目标 Frame。", "Unable to read the target Frame from the Figma link."));
-
-  const rendered = await figmaFetch<{ images?: Record<string, string | null> }>(
-    `https://api.figma.com/v1/images/${fileKey}?ids=${encodedNodeId}&format=png&scale=1&use_absolute_bounds=true`,
-    token,
-    locale
-  );
-  const imageUrl = rendered.images?.[nodeId];
-  if (!imageUrl) throw new Error(localText(locale, "Figma 没有返回目标 Frame 的渲染图。", "Figma did not return a rendered image for the target Frame."));
-  const imageResponse = await fetch(imageUrl);
-  if (!imageResponse.ok) throw new Error(localText(locale, "下载 Figma Frame 渲染图失败。", "Failed to download the rendered Figma Frame image."));
-  const image = Buffer.from(await imageResponse.arrayBuffer());
-  const metadata = await sharp(image).metadata();
-  if (!metadata.width || !metadata.height) throw new Error(localText(locale, "无法读取 Figma 渲染图尺寸。", "Unable to read the dimensions of the rendered Figma image."));
-  const elements = flattenFigmaNodes(root);
-
+function relativeBox(box: Box | undefined, origin: { x: number; y: number }): Box | undefined {
+  if (!box) return undefined;
   return {
-    label: `Figma · ${nodes.name ?? fileKey} · ${nodeId}`,
-    image,
-    viewport: { width: metadata.width, height: metadata.height },
-    elements,
-    diagnostics: [localText(locale, `已读取 ${elements.length} 个可比对 Figma 节点。`, `Read ${elements.length} comparable Figma nodes.`)]
+    x: box.x - origin.x,
+    y: box.y - origin.y,
+    width: box.width,
+    height: box.height
   };
 }
 
-export async function designFromImage(
-  buffer: Buffer,
-  originalName: string,
-  locale: Locale
-): Promise<DesignSource> {
-  const metadata = await sharp(buffer).metadata();
-  if (!metadata.width || !metadata.height) throw new Error(localText(locale, "无法读取上传图片的尺寸。", "Unable to read the uploaded image dimensions."));
-  if (metadata.width > 6000 || metadata.height > 6000) {
-    throw new Error(localText(locale, "设计稿图片宽高不能超过 6000px。", "The design image must not exceed 6000px in either dimension."));
-  }
-  const image = await sharp(buffer).ensureAlpha().png().toBuffer();
+function componentEvidence(node: FigmaNode): DesignComponentEvidence | undefined {
+  const kind = node.type === "COMPONENT_SET"
+    ? "component-set"
+    : node.type === "COMPONENT"
+      ? "component"
+      : node.type === "INSTANCE"
+        ? "instance"
+        : undefined;
+  if (!kind) return undefined;
+
   return {
-    label: localText(locale, `上传图片 · ${originalName}`, `Uploaded image · ${originalName}`),
-    image,
-    viewport: { width: metadata.width, height: metadata.height },
-    elements: [],
-    diagnostics: [localText(locale, "图片输入不包含 Figma 节点属性，将只执行视觉与 H5 静态规则比对。", "Image input has no Figma node properties, so only visual and static H5 rules will be evaluated.")]
+    kind,
+    componentId: node.componentId,
+    componentSetId: node.componentSetId,
+    variantProperties: node.variantProperties,
+    properties: node.componentProperties,
+    propertyDefinitions: node.componentPropertyDefinitions
+  };
+}
+
+function buildTruthNode(
+  node: FigmaNode,
+  frameOrigin: { x: number; y: number },
+  parent?: FigmaNode
+): DesignTruthNode {
+  const parentOrigin = parent?.absoluteBoundingBox ?? frameOrigin;
+  return {
+    id: node.id,
+    parentId: parent?.id,
+    name: node.name ?? node.type ?? node.id,
+    type: node.type ?? "UNKNOWN",
+    text: node.characters?.trim() || undefined,
+    box: relativeBox(node.absoluteBoundingBox, frameOrigin),
+    relativeBox: relativeBox(node.absoluteBoundingBox, parentOrigin),
+    style: nodeStyle(node),
+    styleEvidence: nodeStyleEvidence(node),
+    layout: nodeLayout(node),
+    component: componentEvidence(node),
+    children: (node.children ?? [])
+      .filter((child) => child.visible !== false)
+      .map((child) => buildTruthNode(child, frameOrigin, node))
+  };
+}
+
+function countTruthNodes(node: DesignTruthNode): number {
+  return 1 + node.children.reduce((total, child) => total + countTruthNodes(child), 0);
+}
+
+export async function buildDesignTruthFromFigma(
+  input: {
+    frameUrl: string;
+    accessToken: string;
+    locale: Locale;
+  },
+  dependencies: DesignTruthDependencies = {}
+): Promise<FigmaDesignTruth> {
+  if (!input.accessToken.trim()) {
+    throw new Error(
+      localText(
+        input.locale,
+        "使用 Figma 链接时必须提供 Figma Access Token。",
+        "A Figma Access Token is required when using a Figma link."
+      )
+    );
+  }
+
+  const { fileKey, nodeId } = parseFigmaUrl(input.frameUrl, input.locale);
+  const encodedNodeId = encodeURIComponent(nodeId);
+  const requestJson = dependencies.requestJson ?? ((url, token, locale) => figmaFetch(url, token, locale));
+  const fetchImage = dependencies.fetchImage ?? globalThis.fetch;
+  const nodes = (await requestJson(
+    `https://api.figma.com/v1/files/${fileKey}/nodes?ids=${encodedNodeId}`,
+    input.accessToken,
+    input.locale
+  )) as {
+    name?: string;
+    nodes?: Record<string, {
+      document?: FigmaNode;
+      components?: Record<string, Record<string, unknown>>;
+      componentSets?: Record<string, Record<string, unknown>>;
+      styles?: Record<string, Record<string, unknown>>;
+    }>;
+  };
+  const nodeEntry = nodes.nodes?.[nodeId];
+  const root = nodeEntry?.document;
+  if (!root?.absoluteBoundingBox) {
+    throw new Error(
+      localText(
+        input.locale,
+        "无法从 Figma 链接读取目标 Frame。",
+        "Unable to read the target Frame from the Figma link."
+      )
+    );
+  }
+
+  const rendered = (await requestJson(
+    `https://api.figma.com/v1/images/${fileKey}?ids=${encodedNodeId}&format=png&scale=1&use_absolute_bounds=true`,
+    input.accessToken,
+    input.locale
+  )) as { images?: Record<string, string | null> };
+  const imageUrl = rendered.images?.[nodeId];
+  if (!imageUrl) {
+    throw new Error(
+      localText(
+        input.locale,
+        "Figma 没有返回目标 Frame 的渲染图。",
+        "Figma did not return a rendered image for the target Frame."
+      )
+    );
+  }
+
+  const imageResponse = await fetchImage(imageUrl);
+  if (!imageResponse.ok) {
+    throw new Error(
+      localText(
+        input.locale,
+        "下载 Figma Frame 渲染图失败。",
+        "Failed to download the rendered Figma Frame image."
+      )
+    );
+  }
+  const image = Buffer.from(await imageResponse.arrayBuffer());
+  const metadata = await sharp(image).metadata();
+  if (!metadata.width || !metadata.height) {
+    throw new Error(
+      localText(
+        input.locale,
+        "无法读取 Figma 渲染图尺寸。",
+        "Unable to read the dimensions of the rendered Figma image."
+      )
+    );
+  }
+
+  const truthRoot = buildTruthNode(root, root.absoluteBoundingBox);
+  const nodeCount = countTruthNodes(truthRoot);
+  return {
+    source: {
+      kind: "figma",
+      fileKey,
+      frameId: nodeId,
+      fileName: nodes.name,
+      frameName: root.name ?? nodeId
+    },
+    render: {
+      image,
+      viewport: { width: metadata.width, height: metadata.height }
+    },
+    root: truthRoot,
+    resources: {
+      components: nodeEntry?.components ?? {},
+      componentSets: nodeEntry?.componentSets ?? {},
+      styles: nodeEntry?.styles ?? {}
+    },
+    diagnostics: [
+      localText(
+        input.locale,
+        `已构建包含 ${nodeCount} 个节点的 DesignTruth。`,
+        `Built DesignTruth with ${nodeCount} nodes.`
+      )
+    ]
   };
 }

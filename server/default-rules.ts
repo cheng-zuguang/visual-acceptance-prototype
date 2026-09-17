@@ -15,14 +15,30 @@ thresholds:
   match_confidence_min: 0.72
   high_confidence_min: 0.86
 
+page_alignment:
+  missing_module:
+    minimum_horizontal_overlap_ratio: 0.50
+    maximum_residual_ratio: 0.15
+  confidence:
+    weights:
+      stability_coverage: 0.25
+      anchor_sufficiency: 0.20
+      inlier_ratio: 0.30
+      residual_quality: 0.15
+      dynamic_cleanliness: 0.05
+      structural_support: 0.05
+    levels:
+      high_min: 0.86
+      medium_min: 0.72
+      low_min: 0
+
 rules:
   visual_similarity: error
-  missing_element: error
-  extra_element: warning
   position: error
   size: error
   content: error
   typography: error
+  alignment: error
   color: warning
   decoration: warning
   broken_image: error
@@ -32,12 +48,11 @@ rules:
 # CSS 选择器：截图和 DOM 分析时同时忽略
 ignore: []
 
-# 未能匹配时仍必须判失败的 Figma node id
-critical_figma_nodes: []
-
 capture:
-  timeout_ms: 10000
+  timeout_ms: 30000
   settle_ms: 500
+  samples: 3
+  sample_interval_ms: 750
   # wait_for_selector: "[data-page-ready]"
 `;
 
@@ -54,14 +69,30 @@ thresholds:
   match_confidence_min: 0.72
   high_confidence_min: 0.86
 
+page_alignment:
+  missing_module:
+    minimum_horizontal_overlap_ratio: 0.50
+    maximum_residual_ratio: 0.15
+  confidence:
+    weights:
+      stability_coverage: 0.25
+      anchor_sufficiency: 0.20
+      inlier_ratio: 0.30
+      residual_quality: 0.15
+      dynamic_cleanliness: 0.05
+      structural_support: 0.05
+    levels:
+      high_min: 0.86
+      medium_min: 0.72
+      low_min: 0
+
 rules:
   visual_similarity: error
-  missing_element: error
-  extra_element: warning
   position: error
   size: error
   content: error
   typography: error
+  alignment: error
   color: warning
   decoration: warning
   broken_image: error
@@ -71,12 +102,11 @@ rules:
 # CSS selectors ignored by both screenshots and DOM analysis
 ignore: []
 
-# Figma node IDs that must fail the gate when unmatched
-critical_figma_nodes: []
-
 capture:
-  timeout_ms: 10000
+  timeout_ms: 30000
   settle_ms: 500
+  samples: 3
+  sample_interval_ms: 750
   # wait_for_selector: "[data-page-ready]"
 `;
 
@@ -98,21 +128,36 @@ const DEFAULT_CONFIG: AcceptanceConfig = {
   },
   rules: {
     visual_similarity: "error",
-    missing_element: "error",
-    extra_element: "warning",
     position: "error",
     size: "error",
     content: "error",
     typography: "error",
+    alignment: "error",
     color: "warning",
     decoration: "warning",
     broken_image: "error",
     horizontal_overflow: "error",
     clipped_text: "warning"
   },
+  pageAlignment: {
+    missingModule: {
+      minimumHorizontalOverlapRatio: 0.5,
+      maximumResidualRatio: 0.15
+    },
+    confidence: {
+      weights: {
+        stabilityCoverage: 0.25,
+        anchorSufficiency: 0.2,
+        inlierRatio: 0.3,
+        residualQuality: 0.15,
+        dynamicCleanliness: 0.05,
+        structuralSupport: 0.05
+      },
+      levels: { highMin: 0.86, mediumMin: 0.72, lowMin: 0 }
+    }
+  },
   ignore: [],
-  criticalFigmaNodes: [],
-  capture: { timeoutMs: 10_000, settleMs: 500 }
+  capture: { timeoutMs: 30_000, settleMs: 500, samples: 3, sampleIntervalMs: 750 }
 };
 
 type UnknownRecord = Record<string, unknown>;
@@ -128,10 +173,36 @@ function finiteNumber(value: unknown, fallback: number, min: number, max: number
   return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
 }
 
+function finiteInteger(value: unknown, fallback: number, min: number, max: number): number {
+  return Math.round(finiteNumber(value, fallback, min, max));
+}
+
 function severity(value: unknown, fallback: Severity | "ignore"): Severity | "ignore" {
   return ["error", "warning", "pending", "info", "ignore"].includes(String(value))
     ? (value as Severity | "ignore")
     : fallback;
+}
+
+function normalizedAlignmentWeights(input: UnknownRecord): AcceptanceConfig["pageAlignment"]["confidence"]["weights"] {
+  const fallback = DEFAULT_CONFIG.pageAlignment.confidence.weights;
+  const values = {
+    stabilityCoverage: finiteNumber(input.stability_coverage, fallback.stabilityCoverage, 0, 1000),
+    anchorSufficiency: finiteNumber(input.anchor_sufficiency, fallback.anchorSufficiency, 0, 1000),
+    inlierRatio: finiteNumber(input.inlier_ratio, fallback.inlierRatio, 0, 1000),
+    residualQuality: finiteNumber(input.residual_quality, fallback.residualQuality, 0, 1000),
+    dynamicCleanliness: finiteNumber(input.dynamic_cleanliness, fallback.dynamicCleanliness, 0, 1000),
+    structuralSupport: finiteNumber(input.structural_support, fallback.structuralSupport, 0, 1000)
+  };
+  const total = Object.values(values).reduce((sum, value) => sum + value, 0);
+  if (total <= 0) return { ...fallback };
+  return {
+    stabilityCoverage: values.stabilityCoverage / total,
+    anchorSufficiency: values.anchorSufficiency / total,
+    inlierRatio: values.inlierRatio / total,
+    residualQuality: values.residualQuality / total,
+    dynamicCleanliness: values.dynamicCleanliness / total,
+    structuralSupport: values.structuralSupport / total
+  };
 }
 
 export function parseAcceptanceYaml(source?: string): AcceptanceConfig {
@@ -141,6 +212,10 @@ export function parseAcceptanceYaml(source?: string): AcceptanceConfig {
   const thresholds = record(parsed.thresholds);
   const rulesInput = record(parsed.rules);
   const capture = record(parsed.capture);
+  const pageAlignment = record(parsed.page_alignment);
+  const missingModule = record(pageAlignment.missing_module);
+  const alignmentConfidence = record(pageAlignment.confidence);
+  const alignmentLevels = record(alignmentConfidence.levels);
 
   let viewport: AcceptanceConfig["viewport"] = "auto";
   if (parsed.viewport && parsed.viewport !== "auto") {
@@ -155,6 +230,24 @@ export function parseAcceptanceYaml(source?: string): AcceptanceConfig {
   for (const [name, fallback] of Object.entries(rules)) {
     rules[name] = severity(rulesInput[name], fallback);
   }
+  const lowMin = finiteNumber(
+    alignmentLevels.low_min,
+    DEFAULT_CONFIG.pageAlignment.confidence.levels.lowMin,
+    0,
+    1
+  );
+  const mediumMin = finiteNumber(
+    alignmentLevels.medium_min,
+    DEFAULT_CONFIG.pageAlignment.confidence.levels.mediumMin,
+    lowMin,
+    1
+  );
+  const highMin = finiteNumber(
+    alignmentLevels.high_min,
+    DEFAULT_CONFIG.pageAlignment.confidence.levels.highMin,
+    mediumMin,
+    1
+  );
 
   return {
     viewport,
@@ -209,15 +302,39 @@ export function parseAcceptanceYaml(source?: string): AcceptanceConfig {
       )
     },
     rules,
+    pageAlignment: {
+      missingModule: {
+        minimumHorizontalOverlapRatio: finiteNumber(
+          missingModule.minimum_horizontal_overlap_ratio,
+          DEFAULT_CONFIG.pageAlignment.missingModule.minimumHorizontalOverlapRatio,
+          0,
+          1
+        ),
+        maximumResidualRatio: finiteNumber(
+          missingModule.maximum_residual_ratio,
+          DEFAULT_CONFIG.pageAlignment.missingModule.maximumResidualRatio,
+          0,
+          1
+        )
+      },
+      confidence: {
+        weights: normalizedAlignmentWeights(record(alignmentConfidence.weights)),
+        levels: { highMin, mediumMin, lowMin }
+      }
+    },
     ignore: Array.isArray(parsed.ignore)
       ? parsed.ignore.filter((value): value is string => typeof value === "string")
-      : [],
-    criticalFigmaNodes: Array.isArray(parsed.critical_figma_nodes)
-      ? parsed.critical_figma_nodes.filter((value): value is string => typeof value === "string")
       : [],
     capture: {
       timeoutMs: finiteNumber(capture.timeout_ms, DEFAULT_CONFIG.capture.timeoutMs, 1000, 60_000),
       settleMs: finiteNumber(capture.settle_ms, DEFAULT_CONFIG.capture.settleMs, 0, 5000),
+      samples: finiteInteger(capture.samples, DEFAULT_CONFIG.capture.samples, 1, 5),
+      sampleIntervalMs: finiteNumber(
+        capture.sample_interval_ms,
+        DEFAULT_CONFIG.capture.sampleIntervalMs,
+        0,
+        5000
+      ),
       waitForSelector:
         typeof capture.wait_for_selector === "string" && capture.wait_for_selector.trim()
           ? capture.wait_for_selector.trim()

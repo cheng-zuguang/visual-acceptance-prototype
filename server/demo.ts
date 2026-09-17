@@ -1,6 +1,11 @@
-import type { AcceptanceConfig, DesignElement, DomElement } from "../src/types";
-import { capturePage, withBrowser } from "./capture";
-import type { DesignSource } from "./design";
+import type {
+  AcceptanceConfig,
+  DesignTruth,
+  DesignTruthNode,
+  DomElement,
+  LiveActualEvidence
+} from "../src/types";
+import { captureLiveActualEvidence, capturePage, withBrowser } from "./capture";
 import { localText, type Locale } from "./i18n";
 
 function names(locale: Locale): Record<string, string> {
@@ -52,17 +57,20 @@ function typeFor(element: DomElement): string {
   return "FRAME";
 }
 
-function referenceElements(elements: DomElement[], locale: Locale): DesignElement[] {
+function referenceNodes(elements: DomElement[], locale: Locale): DesignTruthNode[] {
   const localizedNames = names(locale);
   return elements
     .filter((element) => element.dataFigmaId)
     .map((element) => ({
       id: element.dataFigmaId!,
+      parentId: "demo:root",
       name: localizedNames[element.dataFigmaId!] ?? element.dataFigmaId!,
       type: typeFor(element),
       text: element.text,
       box: element.box,
-      style: element.style
+      relativeBox: element.box,
+      style: element.style,
+      children: []
     }));
 }
 
@@ -70,21 +78,36 @@ export async function createDemoSources(
   baseUrl: string,
   config: AcceptanceConfig,
   locale: Locale
-): Promise<{ design: DesignSource; actual: Awaited<ReturnType<typeof capturePage>> }> {
+): Promise<{ design: DesignTruth; actual: LiveActualEvidence }> {
   const viewport = { width: 1280, height: 800 };
-  return withBrowser(async (browser) => {
-    const reference = await capturePage(`${baseUrl}/demo/reference?locale=${locale}`, viewport, config, locale, browser);
-    const actual = await capturePage(`${baseUrl}/demo/actual?locale=${locale}`, viewport, config, locale, browser);
-    const elements = referenceElements(reference.elements, locale);
-    return {
-      design: {
-        label: localText(locale, "内置基准页面", "Built-in reference page"),
-        image: reference.image,
-        viewport,
-        elements,
-        diagnostics: [localText(locale, `内置样本提供 ${elements.length} 个精确映射节点。`, `The built-in sample provides ${elements.length} exactly mapped nodes.`)]
+  const reference = await withBrowser((browser) =>
+    capturePage(`${baseUrl}/demo/reference?locale=${locale}`, viewport, config, locale, browser)
+  );
+  const actual: LiveActualEvidence = await captureLiveActualEvidence(
+    `${baseUrl}/demo/actual?locale=${locale}`,
+    viewport,
+    config,
+    locale
+  );
+  const nodes = referenceNodes(reference.elements, locale);
+  return {
+    design: {
+      source: {
+        kind: "demo",
+        name: localText(locale, "内置基准页面", "Built-in reference page")
       },
-      actual
-    };
-  });
+      render: { image: reference.image, viewport },
+      root: {
+        id: "demo:root",
+        name: localText(locale, "内置基准页面", "Built-in reference page"),
+        type: "FRAME",
+        box: { x: 0, y: 0, ...viewport },
+        relativeBox: { x: 0, y: 0, ...viewport },
+        style: {},
+        children: nodes
+      },
+      diagnostics: [localText(locale, `内置样本提供 ${nodes.length} 个精确映射节点。`, `The built-in sample provides ${nodes.length} exactly mapped nodes.`)]
+    },
+    actual
+  };
 }
