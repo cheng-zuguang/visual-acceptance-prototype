@@ -1,6 +1,6 @@
 # 通过公共 API 运行 Screenshot/Hybrid 走查
 
-Status: ready-for-agent
+Status: ready-for-human
 
 Type: AFK
 
@@ -12,14 +12,14 @@ User stories: US-03, US-06
 
 ## Acceptance criteria
 
-- [ ] 外部服务可以创建截图资产并获得短期受控上传地址
-- [ ] 上传完成后校验文件类型、大小、像素总量、哈希和图片可解码性
-- [ ] 只有状态为 ready 且属于当前租户的资产可以用于 Review
-- [ ] 公共请求支持 Screenshot 和 Hybrid ActualEvidence
-- [ ] 任务结果明确记录实际证据模式及降级原因
-- [ ] 生成制品以稳定 Artifact 标识引用，下载地址短期有效
-- [ ] Figma、浏览器和存储凭据只通过密钥引用使用，不进入报告和日志
-- [ ] 契约测试覆盖成功上传、损坏图片、越权资产和过期地址
+- [x] 外部服务可以创建截图资产并获得短期受控上传地址
+- [x] 上传完成后校验文件类型、大小、像素总量、哈希和图片可解码性
+- [x] 只有状态为 ready 且属于当前租户的资产可以用于 Review
+- [x] 公共请求支持 Screenshot 和 Hybrid ActualEvidence
+- [x] 任务结果明确记录实际证据模式及降级原因
+- [x] 生成制品以稳定 Artifact 标识引用，下载地址短期有效
+- [x] Figma、浏览器和存储凭据只通过密钥引用使用，不进入报告和日志
+- [x] 契约测试覆盖成功上传、损坏图片、越权资产和过期地址
 
 ## Blocked by
 
@@ -28,3 +28,5 @@ User stories: US-03, US-06
 - [15 通过安全异步 API 走查一个 Live PagePair](./15-submit-live-review-through-public-api.md)
 
 ## Comments
+
+- `/v1/assets` 使用进程内资产存储与 HMAC 短期地址完成首版受控上传；Live/Hybrid 的浏览器 Headers/Cookies 只由服务端 `browserCredentialRef` 解析并注入采集会话。

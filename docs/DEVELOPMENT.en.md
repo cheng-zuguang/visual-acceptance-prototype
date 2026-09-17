@@ -47,12 +47,16 @@ Vite listens on `127.0.0.1:5173` and proxies `/api` and `/demo` to `127.0.0.1:43
 
 ## Verification before handoff
 
-There is currently no automated test suite. The minimum verification set is:
+Server unit tests call `ReviewService` directly without starting an HTTP server. The minimum verification set is:
 
 ```bash
+npm test
+npm run test:prometheus
 npm run typecheck
 npm run build
 ```
+
+`npm run test:prometheus` runs `promtool check rules` followed by the PromQL rule unit tests. Locally, install `promtool`, point `PROMTOOL_BIN` at a binary, or start Docker to use the pinned `prom/prometheus:v3.14.0` image. CI runs the same entry point automatically. The suite covers instance counter resets, healthy zero traffic, rejection-rate threshold boundaries, sustained `up=0` scrape failures, and expected targets whose `up` series disappear entirely from service discovery.
 
 Changes to capture or comparison logic should also run this manual regression:
 
@@ -112,11 +116,12 @@ A Linux CI environment may also require system packages; use the dependency opti
 
 ### The page times out or is captured too early
 
-- Increase `capture.timeout_ms`;
+- Increase the total `capture.timeout_ms` budget, which covers session setup, all samples, and inter-sample waits;
 - Add a stable ready marker to the business page and configure `wait_for_selector`;
 - Increase `settle_ms`;
+- Tune `samples` (1–5) and `sample_interval_ms` (0–5000) for the page update rate;
 - Ensure the target address is reachable from the server-side browser; `localhost` in another container is not the current host;
-- Add the smallest uncontrollable clock, carousel, or advertisement region to `ignore`.
+- Prefer multi-frame change trajectories for market ticks; add the smallest uncontrollable clock, carousel, or advertisement region to `ignore`.
 
 ### Fonts or images cause a large diff
 
@@ -130,9 +135,9 @@ A Linux CI environment may also require system packages; use the dependency opti
 
 Add `data-figma-id` to important DOM elements first. You can also:
 
-- Raise `match_confidence_min` to reject more unreliable geometric matches;
-- Raise `high_confidence_min` so more automatic-match errors become `pending`;
-- Use `critical_figma_nodes` to identify nodes that must be present;
+- Raise `match_confidence_min` to reject more unreliable stable-text or structure-geometry matches;
+- Raise `high_confidence_min` so more automatic-match findings become `pending`;
+- Review unmatched design and actual counts in the report to assess intersection coverage;
 - Check whether duplicate copy caused text matching to select the wrong element.
 
 ### Figma request failure
@@ -146,7 +151,8 @@ Add `data-figma-id` to important DOM elements first. You can also:
 
 - A base URL may end at `/v1`, `/responses`, or `/models`;
 - The `/models` response must expose recognizable model ids;
-- Advice generation requires support for two image inputs, the Responses API, and strict JSON Schema output;
+- Advice generation requires the Responses API and strict JSON Schema output; images are used for ambiguous element binding but no longer enter final AI advice;
+- AI advice may return only server-provided evidence references; unknown references or output that remains invalid after repair is discarded into runtime diagnostics;
 - Upstream redirects are rejected; model listing times out after 30 seconds and advice after 60 seconds;
 - A local compatible service may omit the key, but its URL is required;
 - Inspect **Runtime diagnostics** in the report. AI failure should appear only there.

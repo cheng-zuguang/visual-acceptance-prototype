@@ -1,6 +1,6 @@
 # 发送签名完成 Webhook
 
-Status: ready-for-agent
+Status: ready-for-human
 
 Type: AFK
 
@@ -12,14 +12,14 @@ User stories: US-06
 
 ## Acceptance criteria
 
-- [ ] 支持 completed、failed 和 cancelled 事件
-- [ ] 事件包含唯一事件标识、发生时间、Review 标识、执行状态、验收结论和结果地址
-- [ ] 每次投递包含时间戳和 HMAC 签名
-- [ ] Webhook 密钥通过密钥引用读取，不出现在任务结果中
-- [ ] 失败投递使用有上限的指数退避重试并记录结果
-- [ ] 相同事件重试保持同一个事件标识
-- [ ] Webhook 最终失败不会改变 Review 的执行状态和结果
-- [ ] 契约测试覆盖验签、重复事件、重试和永久失败
+- [x] 支持 completed、failed 和 cancelled 事件
+- [x] 事件包含唯一事件标识、发生时间、Review 标识、执行状态、验收结论和结果地址
+- [x] 每次投递包含时间戳和 HMAC 签名
+- [x] Webhook 密钥通过密钥引用读取，不出现在任务结果中
+- [x] 失败投递使用有上限的指数退避重试并记录结果
+- [x] 相同事件重试保持同一个事件标识
+- [x] Webhook 最终失败不会改变 Review 的执行状态和结果
+- [x] 契约测试覆盖验签、重复事件、重试和永久失败
 
 ## Blocked by
 
@@ -27,3 +27,5 @@ User stories: US-06
 - [17 支持批量公共调用与幂等提交](./17-support-idempotent-batch-public-reviews.md)
 
 ## Comments
+
+- `server/webhook.ts` 固定事件体与事件标识，按 `timestamp.body` 生成 HMAC-SHA256；投递记录可查询，但最终失败与 Review 结果解耦。

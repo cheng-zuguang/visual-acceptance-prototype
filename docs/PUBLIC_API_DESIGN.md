@@ -1,7 +1,7 @@
 # DiffLab 公共服务 API 设计草案
 
-> 状态：目标接口草案，尚未由当前原型实现。  
-> 当前本地 `/api/compare` 的真实行为仍以 [HTTP API 参考](./API.md) 为准。
+> 状态：渐进实现中。任务 15–18 已实现安全异步调用、受控截图资产、批量幂等与签名 Webhook。
+> 当前真实路由、配置和未实现边界以 [HTTP API 参考](./API.md) 为准。
 
 ## 1. 设计目标
 
@@ -98,7 +98,7 @@ PagePair
 | `GET` | `/v1/capabilities` | 查询输入模式、规则版本和制品能力 |
 | `GET` | `/v1/rule-schema` | 获取当前规则 JSON Schema 或 YAML 说明 |
 
-第一阶段只需实现 `POST /reviews`、`GET /reviews/{id}`、`GET /result` 和 `GET /artifacts`。其余接口可随截图上传和平台化部署补齐。
+当前已实现截图资产创建/查询与短期上传、Live/Screenshot/Hybrid 批量 Review、租户级幂等、页面进度、结果/Excel 短期下载、取消和签名 Webhook。当前资产、任务、幂等、制品和投递记录均为进程内实现；生产对象存储与持久化队列仍待补齐。
 
 ## 5. 鉴权与租户范围
 
@@ -191,7 +191,13 @@ Idempotency-Key: 5ea2ba2d-9d22-4a5e-89a7-85965847e893
         "kind": "hybrid",
         "url": "https://h5.example.com/market",
         "screenshotAssetIds": ["ast_01J..."],
-        "browserCredentialRef": "cred_h5_test_environment"
+        "browserCredentialRef": "cred_h5_test_environment",
+        "device": {
+          "platform": "iOS",
+          "dpr": 3,
+          "orientation": "portrait",
+          "viewport": { "width": 390, "height": 844 }
+        }
       },
       "viewport": {
         "width": 390,
@@ -222,7 +228,7 @@ Idempotency-Key: 5ea2ba2d-9d22-4a5e-89a7-85965847e893
 - `live`：必须提供 `url`；
 - `screenshot`：必须提供一个或多个 `screenshotAssetIds`；
 - `hybrid`：同时提供 `url` 和截图资产；
-- `long_screenshot`：提供长截图资产，后续阶段启用。
+- `long_screenshot`：提供且仅提供一个长截图资产，并携带目标设备 viewport 与 DPR；服务按 viewport 分片审查。可选提供 `url` 和 `browserCredentialRef`，使每个分片叠加同一 H5 会话中的多帧 DOM、样式和动态证据；逐片对齐失败时安全降级为 Screenshot。
 
 ### 7.2 响应
 
@@ -334,7 +340,16 @@ GET /v1/reviews/rev_01J.../result
         "stablePixelSimilarity": 0.968,
         "dynamicStructureSimilarity": 0.942,
         "dynamicAreaRatio": 0.185,
-        "unresolvedDynamicRegions": 1
+        "unresolvedDynamicRegions": 1,
+        "matchedElements": 42,
+        "unmatchedDesignElements": 3,
+        "unmatchedActualElements": 5
+      },
+      "matching": {
+        "matches": [],
+        "unmatchedDesignCount": 3,
+        "unmatchedActualCount": 5,
+        "diagnostics": ["交集覆盖率不足，建议检查页面状态或补充稳定标识。"]
       },
       "issues": [
         {
@@ -347,7 +362,12 @@ GET /v1/reviews/rev_01J.../result
           "actual": "列左边界 x=222px",
           "suggestion": "将最新价列整体向左调整 8px。",
           "rule": "alignment",
-          "confidence": 0.95,
+          "evidenceConfidence": {
+            "score": 0.95,
+            "level": "high",
+            "basis": ["structure-geometry"],
+            "reasons": ["多帧 DOM 指纹、Figma 结构和几何位置稳定一致。"]
+          },
           "figmaNodeId": "123:456",
           "artifactIds": ["art_design_crop", "art_actual_crop"]
         }
@@ -380,7 +400,7 @@ GET /v1/reviews/rev_01J.../artifacts
 }
 ```
 
-下载地址使用短期签名 URL。调用方不应持久化 URL，应持久化 `artifactId` 并在需要下载时重新查询。
+当前进程内实现已返回 HMAC 短期签名下载地址，同时保留同租户 `reviews:read` 鉴权下载。生产对象存储、跨实例签名与制品保留策略尚未实现。
 
 ## 11. Webhook
 
@@ -439,8 +459,11 @@ X-DiffLab-Signature: v1=<hex-hmac>
 - `FORBIDDEN`
 - `RESOURCE_NOT_FOUND`
 - `IDEMPOTENCY_CONFLICT`
+- `REVIEW_QUOTA_EXCEEDED`
 - `ASSET_NOT_READY`
 - `UNSUPPORTED_ASSET`
+- `SIGNED_URL_EXPIRED`
+- `INVALID_SIGNATURE`
 - `FIGMA_ACCESS_DENIED`
 - `FIGMA_RATE_LIMITED`
 - `H5_NAVIGATION_FAILED`
@@ -479,7 +502,7 @@ HTTP 状态码表示 API 请求或服务执行状态；UI 验收不通过仍然�
 - 日志、Agent 输入和报告中的 Token、Cookie 与个人信息脱敏；
 - 完整审计日志和 `requestId`/`reviewId` 关联。
 
-当前原型只监听本机且没有这些边界，因此现有 `/api/compare` 不能直接作为公共接口暴露。
+旧 `/api/compare` 没有这些边界，不能直接作为公共接口暴露。新 `/v1` 已实现服务 Token/作用域、租户隔离、资产校验、精确 H5/Webhook 域名白名单、逐请求 DNS 复验、私网/保留地址阻断、幂等批量、资源配额、进程内短期签名 URL 和 Webhook HMAC；持久化队列、调用频率限流、对象存储、生产密钥托管和完整审计仍是生产部署前置项。
 
 ## 15. 可观测性
 
@@ -498,7 +521,7 @@ HTTP 状态码表示 API 请求或服务执行状态；UI 验收不通过仍然�
 
 ## 16. MCP 适配
 
-MCP 只包装公共应用服务，不重新实现走查逻辑。建议能力：
+MCP 只包装公共应用服务，不重新实现走查逻辑。当前通过 `server/mcp.ts` 提供以下能力：
 
 ```text
 review.create
@@ -508,6 +531,10 @@ review.list_artifacts
 ```
 
 长时间任务仍使用异步 `reviewId`。MCP Client 可以轮询资源或由宿主调度后续检查，但 MCP 与 HTTP API 必须返回同一套状态、结果和错误语义。
+
+当前 stdio 入口位于 `server/mcp-stdio.ts`，通过 `DIFFLAB_API_BASE_URL` 和 `DIFFLAB_SERVICE_TOKEN` 连接 `/v1`。一个 MCP 进程对应一条公共 API 服务身份，并继承其 tenant、Scope、幂等、SSRF、签名地址和结果脱敏边界。详细调用方式见 [MCP 走查接口](./MCP.md)。
+
+本地简易版本允许从 MCP/API 进程的 `OPENAI_*` 环境变量启用 AI，也允许 `review.create` 用可选 `ai` 参数覆盖。内联 AI Key 不写入 Review 状态和结果；该方式只面向可信本地环境，共享网络部署仍应替换为 tenant-scoped 密钥引用。
 
 ## 17. 与当前原型的迁移关系
 

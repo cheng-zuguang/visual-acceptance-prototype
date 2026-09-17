@@ -10,8 +10,10 @@ DiffLab compares a Figma Frame or reference image with an H5 web page in the sam
 
 - Uses a Figma Frame URL or PNG/JPG/WebP image as the design reference;
 - Captures an H5 page with Playwright in a fixed viewport, DPR 1, and light mode;
-- Compares overall pixel similarity and highlights dense diff regions;
-- Checks Figma nodes against DOM elements for position, size, content, typography, color, and decoration;
+- Tiles one uploaded long screenshot by device viewport/DPR and maps findings back to full-page coordinates;
+- Compares stable-region pixel similarity inside reliable element matches and highlights dense diff regions;
+- Checks Figma nodes against DOM elements for position, size, content, font, text alignment, color, and decoration;
+- Normalizes one dynamic market value from at least three frames while retaining layout, style, and overflow checks;
 - Detects broken images, horizontal overflow, and potentially clipped text;
 - Configures thresholds, severities, ignored regions, and page stabilization through YAML;
 - Optionally calls an OpenAI Responses-compatible model to prioritize fixes;
@@ -49,10 +51,12 @@ Click **Run built-in diff sample** on the home page. The sample deliberately int
 Prepare:
 
 1. A Figma Frame sharing URL containing `node-id` plus a Figma Access Token, or a reference image no larger than 25 MB and 6000 px on either axis;
-2. An HTTP/HTTPS H5 URL accessible to the server-side browser;
+2. An HTTP/HTTPS H5 URL accessible to the server-side browser, or one long screenshot with its device DPR and one-screen height;
 3. A YAML acceptance configuration, such as [acceptance.example.en.yaml](./acceptance.example.en.yaml).
 
 An image reference has no node, text, or style metadata, so it only supports pixel comparison and H5 static audits. Use a Figma Frame when you need element-level locations and property comparisons.
+
+Live H5 reviews capture three samples from one browser page session by default. If at least three frames jointly prove that one market value changes only in text while identity, geometry, and style remain stable, DiffLab symmetrically normalizes its design and actual character pixels. The report presents stable-region similarity, dynamic-region ratio, and strategy separately; font, size, weight, color, position, dimensions, text alignment, and clipped overflow remain reviewable.
 
 ## Improve element matching
 
@@ -68,7 +72,7 @@ Add Figma node ids to important H5 elements:
 <button data-figma-id="123:456">Submit</button>
 ```
 
-Hyphenated ids are normalized during matching. When an automatic match falls below `high_confidence_min`, element-property findings configured as `error` are downgraded to `pending` to avoid blocking on an unreliable match. Other severities remain unchanged.
+Hyphenated ids are normalized during matching. Stable-text and structure-geometry candidates enter the review intersection only at or above `match_confidence_min`. When a match falls below `high_confidence_min`, element-property findings configured as `error` or `warning` are downgraded to `pending`; `info` remains unchanged.
 
 ## Credentials and AI
 
@@ -83,6 +87,15 @@ You can also set server defaults before starting the app:
 | `OPENAI_API_KEY` | Default server-side AI API key | None |
 | `OPENAI_BASE_URL` | OpenAI-compatible base, `/responses`, or `/models` URL | `https://api.openai.com/v1` |
 | `OPENAI_MODEL` | Default AI model id | `gpt-5.6-terra` |
+| `DIFFLAB_AI_ENABLED` | Whether MCP and public Reviews enable AI by default | Inferred from AI key/API URL |
+| `DIFFLAB_API_BASE_URL` | Public `/v1` API base URL used by MCP tools | `http://127.0.0.1:4318` |
+| `DIFFLAB_SERVICE_TOKEN` | Bearer service identity shared by the public API and MCP | None |
+| `DIFFLAB_AI_ALERT_MIN_ATTEMPTS` | Minimum AI advice attempts before alert evaluation | `20` |
+| `DIFFLAB_AI_TIMEOUT_ALERT_RATIO` | AI advice timeout-rate alert threshold | `0.2` |
+| `DIFFLAB_AI_EVIDENCE_DANGLING_ALERT_RATIO` | AI advice dangling-evidence alert threshold | `0.1` |
+| `DIFFLAB_MCP_ALLOWED_HOSTS` | Comma-separated Host names allowed by Streamable HTTP MCP | Localhost names only |
+| `DIFFLAB_MCP_ALLOWED_ORIGINS` | Origin hostnames allowed for browser MCP clients | Same as allowed hosts |
+| `DIFFLAB_ALLOWED_CLIENT_IPS` | Comma-separated public client IPs/CIDRs allowed to access the service; `/api/health` is exempt | Unrestricted |
 | `NODE_ENV` | When set to `production`, the API serves an existing `dist/` | Unset |
 
 ```bash
@@ -101,7 +114,10 @@ Values entered in the UI take precedence over environment variables. A custom se
 | --- | --- |
 | `npm run dev` | Starts the Vite frontend and hot-reloading API server |
 | `npm run dev:client` | Starts only the frontend; proxies `/api` and `/demo` to `4318` |
-| `npm run dev:server` | Starts only the API server |
+| `npm run dev:server` | Starts the API server and same-port `/mcp` Streamable HTTP endpoint |
+| `npm run mcp` | Starts the stdio MCP server backed by the public `/v1` API |
+| `npm run validate:financial-gold-set -- --manifest <file>` | Validates financial H5 gold-set evidence, approval, and reuse gates and can export page-alignment labels |
+| `npm run calibrate:alignment -- --labels <file>` | Calibrates page-alignment parameters and emits candidate YAML only after fold-stability and OOF-performance gates pass |
 | `npm run typecheck` | Runs the TypeScript type checker |
 | `npm run build` | Type-checks and builds the frontend into `dist/` |
 | `npm start` | Starts the API in production mode and serves `dist/` when present |
@@ -127,29 +143,42 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Then navigate to <http://127.0.0.1:14318/prototype/visual-qa> (host port defaults to `14318` to avoid collision).
+Then navigate to <http://127.0.0.1:14318/prototype/visual-qa>. Compose binds the host port to the loopback interface only, allowing local browsers and Cloudflare Tunnel while preventing direct access that bypasses the Tunnel.
+
+When publishing through Cloudflare Tunnel, configure a client IP allowlist in `.env` if needed:
+
+```dotenv
+DIFFLAB_ALLOWED_CLIENT_IPS=203.0.113.10,198.51.100.0/24,2001:db8:abcd::/48
+```
+
+When enabled, the service trusts only Cloudflare's `CF-Connecting-IP` header. Requests without that header or from clients outside the allowlist receive `403`; `/api/health` remains public. Do not expose the container port on a non-loopback host interface, because direct clients could bypass the Tunnel and forge the header.
 
 Alternatively, using the Docker CLI directly:
 
 ```bash
 docker build -t difflab:latest .
-docker run -d --name difflab --shm-size=1gb -p 14318:4318 difflab:latest
+docker run -d --name difflab --shm-size=1gb -p 127.0.0.1:14318:4318 difflab:latest
 ```
 
 ## Documentation
 
 - [Architecture and comparison pipeline](./docs/ARCHITECTURE.en.md)
 - [YAML acceptance-rule reference](./docs/ACCEPTANCE_RULES.en.md)
+- [Offline page-alignment confidence calibration](./docs/PAGE_ALIGNMENT_CALIBRATION.en.md)
 - [HTTP API reference](./docs/API.en.md)
+- [MCP review interface](./docs/MCP.en.md)
+- [Public service API design and implementation boundary](./docs/PUBLIC_API_DESIGN.md)
 - [Development, verification, and troubleshooting](./docs/DEVELOPMENT.en.md)
 - [Prototype validation notes](./PROTOTYPE_NOTES.en.md)
 - [MIT License](./LICENSE) ([Chinese reference translation](./LICENSE.zh-CN.md))
 
 ## Security and scope
 
-- The service listens only on `127.0.0.1` and has no authentication, authorization, rate limiting, or tenant isolation;
-- `/api/compare` allows its browser to visit any supplied HTTP/HTTPS URL and forwards credentials to Figma or the configured AI endpoint. Do not expose this prototype to an untrusted network;
-- The H5 page must be available in its default static state without an interactive login. Each run accepts one Frame and one viewport;
+- Legacy `/api` routes have no authentication, authorization, or network isolation and are for local prototype use only;
+- New `/v1` routes support tenant-scoped assets, batched Live/Screenshot/Hybrid reviews, idempotent submission, bounded global/per-tenant queues, submission rate limits, shared PagePair concurrency, short-lived signed transfers, signed webhooks, and H5/callback host and DNS protection;
+- `/v1` still keeps jobs, assets, idempotency, and webhook delivery records in process, without object storage, durable queues, cross-instance coordination, or production secret management;
+- `/api/compare` allows its browser to visit any supplied HTTP/HTTPS URL and forwards credentials to Figma or the configured AI endpoint. Do not expose that legacy route to an untrusted network;
+- The H5 page should already be in its target state. Public Live/Hybrid jobs can inject headers/cookies through a server-side browser credential reference, but do not orchestrate interactive login or business-state navigation. Each PagePair still represents one Frame, page state, and viewport;
 - Fonts, dynamic content, asynchronous data, environment differences, and complex Figma Auto Layout can introduce noise. Calibrate thresholds against real business samples before using the result as a gate.
 
 ## License

@@ -1,6 +1,6 @@
 # 批量运行多个独立 PagePair
 
-Status: ready-for-agent
+Status: ready-for-human
 
 Type: AFK
 
@@ -12,13 +12,13 @@ User stories: US-05
 
 ## Acceptance criteria
 
-- [ ] 一个 Review 可以提交多个 PagePair
-- [ ] 每个 PagePair 独立校验输入、运行并产生结论
-- [ ] 一个页面失败不会丢失其他已完成页面的结果
-- [ ] 任务级结果区分执行状态与 UI 验收结论
-- [ ] 页面名称和调用方页面标识在全部报告中稳定保留
-- [ ] 统一 Excel 包含全部页面问题和页面级汇总
-- [ ] 自动化测试覆盖全部成功、部分执行失败和混合验收结论
+- [x] 一个 Review 可以提交多个 PagePair
+- [x] 每个 PagePair 独立校验输入、运行并产生结论
+- [x] 一个页面失败不会丢失其他已完成页面的结果
+- [x] 任务级结果区分执行状态与 UI 验收结论
+- [x] 页面名称和调用方页面标识在全部报告中稳定保留
+- [x] 统一 Excel 包含全部页面问题和页面级汇总
+- [x] 自动化测试覆盖全部成功、部分执行失败和混合验收结论
 
 ## Blocked by
 
@@ -26,3 +26,5 @@ User stories: US-05
 - [13 生成红框证据图与 Excel 报告](./13-generate-excel-with-annotated-evidence.md)
 
 ## Comments
+
+- `ReviewService.reviewPagePairs` 并行运行彼此独立的 PagePair，以页面级结果聚合任务状态、验收结论、优先级统计和统一 Excel。

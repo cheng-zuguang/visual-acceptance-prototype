@@ -32,3 +32,8 @@ User stories: US-02, US-04, US-07
 - [13 生成红框证据图与 Excel 报告](./13-generate-excel-with-annotated-evidence.md)
 
 ## Comments
+
+- 已增加页面模块对齐置信度的离线校准工具：读取单页、批量或公共 API Review JSON 与人工 `correct / false_positive` 标签，网格搜索六项权重和 High/Medium 边界，输出候选 YAML、准确率、混淆矩阵和逐样本预测。工具不覆盖生产规则。该能力只完成本任务中的页面对齐子项；完整首版发布校准仍需覆盖动态区域、UI 问题、MarketVariant、列表、Hybrid、时延与人工保留率。
+- 页面对齐校准已增加按 Page/Frame 的确定性训练/验证分组、group k-fold 交叉验证，以及训练集、留出集和 out-of-fold 的“当前配置 vs 候选配置”指标差异。当前配置从各 Review 的 `scoreBreakdown` 实际权重与阈值重算，避免默认规则污染历史样本基线。
+- 已增加跨折候选参数稳定性分析：输出六项权重和 High/Medium 阈值的方差、标准差、范围及近似 95% 置信区间。有效折数不足或参数标准差超限时，推荐状态为 `rejected`，CLI 只保留诊断 metrics JSON，不发布候选 YAML。
+- 候选推荐现已增加 OOF 效果门禁：默认不允许平衡准确率低于当前规则，也不允许假阳性率增加。参数稳定性与两项 OOF 指标必须全部通过才发布候选 YAML；metrics JSON 保留每项门禁的当前值、候选值、差值、阈值和拒绝原因。

@@ -24,3 +24,8 @@ User stories: US-02, US-07
 None - can start immediately.
 
 ## Comments
+
+- 2026-09-10：已实现版本化金标清单校验器、CLI 和 PageAlignment 校准清单导出；草稿、缺失 Review JSON、凭据 URL、越界证据文件及未显式标注的动态内容均不能静默进入校准。
+- 2026-09-10：已将“美联储观察” Figma `0:72`、对应 H5 和原始 Review JSON 登记为 Live 草稿，并将机构小程序 Figma `52:597` 登记为待配对来源。该 Review 尚无 `matching.pageAlignment.regions`，需重新走查后再做对齐标签。
+- 2026-09-11：已为尾部缺失增加经过 temporal-consistency 验证的后置结构锚点回退，并收录重新走查的 Review JSON。`0:286` 投票模块候选暂标为正确缺失，已形成 `340px` 设计流缺口、`273px` 位移阶跃、`67px` residual（比例 `0.1971`）；`0:210` 原生导航暂标为误报。两条标签仍待设计师批准，且当前仅 1 个 Page/Frame 分组；不会用 `废` 页历史 Frame 凑满 3 组。
+- 仍需设计人员确认问题真值与模块映射，补充 Screenshot、Hybrid、下跌和平盘样本，并确认数据可长期用于测试；因此保持 `ready-for-human`，不勾选验收项。

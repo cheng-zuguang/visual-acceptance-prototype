@@ -1,5 +1,7 @@
 # AI UI 视觉走查：需求与技术蓝图
 
+> 2026-09-14 更新：默认交集忽略策略已由 [设计驱动覆盖](DESIGN_COVERAGE.md) 和 ADR 0002 取代。下文交集策略为历史规划，不再是未匹配设计项的发布边界。
+
 > 状态：讨论结论整理稿  
 > 适用范围：DiffLab 从静态单页视觉比对演进为支持金融行情动态内容的 AI UI 视觉走查引擎  
 > 非目标：Jira、企微通知、任务流转、研发整改闭环和业务自动化测试
@@ -102,12 +104,16 @@ Hybrid 模式中，Figma 是预期真值，设备截图是正式实际结果，H
 flowchart LR
   UI["src/App.tsx\n配置与报告"] --> API["server/index.ts\n/api/compare"]
   API --> RULES["server/default-rules.ts\n解析 YAML"]
-  API --> DESIGN["server/design.ts\nFigma/图片设计源"]
-  API --> CAPTURE["server/capture.ts\n单帧 H5 采集"]
+  API --> DESIGN["server/design.ts\nFigma DesignTruth"]
+  API --> CAPTURE["server/capture.ts\n多帧 Live ActualEvidence"]
+  API --> SHOT["server/screenshot.ts\nScreenshot ActualEvidence"]
+  CAPTURE --> HYBRID["server/hybrid.ts\n锚点对齐与安全降级"]
+  SHOT --> HYBRID
   DESIGN --> COMPARE["server/compare.ts\n像素与元素比对"]
   CAPTURE --> COMPARE
   COMPARE --> AI["server/ai.ts\n单轮改进建议"]
-  COMPARE --> REPORT["server/report.ts\n门禁与报告"]
+  COMPARE --> ISSUE["server/review-issue.ts\n问题归并与优先级"]
+  ISSUE --> REPORT["server/report.ts\n门禁与报告"]
   AI --> REPORT
   REPORT --> UI
 ```
@@ -116,19 +122,27 @@ flowchart LR
 
 | 模块 | 直接调用者 | 当前职责 | 对目标能力的限制 |
 | --- | --- | --- | --- |
-| `src/App.tsx` | 浏览器用户 | 收集一个设计源、一个 H5 URL 和 YAML，展示报告 | 不支持实际截图、批量 PagePair 和 Excel |
-| `server/index.ts` | `src/App.tsx` | 串联规则、设计、采集、比对、AI 和报告 | 一次请求只有一次采集和一次比对 |
-| `server/design.ts` | `server/index.ts`、`server/demo.ts` | 读取 Figma 或上传图片，生成 `DesignSource` | Figma 节点被展平，缺少父子结构、组件和 Variant 语义 |
-| `server/capture.ts` | `server/index.ts`、`server/demo.ts` | 创建浏览器、等待稳定、截取首屏、提取 DOM 和静态问题 | 只返回一个 `PageCapture`，动态变化被视为噪声 |
-| `server/compare.ts` | `server/index.ts`、`server/demo.ts` | 像素比对、节点匹配、参数规则和问题排序 | 动态文本会破坏文本匹配和整体像素相似度 |
-| `server/ai.ts` | `server/index.ts` | 根据最终截图和已有问题生成一次建议 | 不观察多帧，也不验证自己的判断 |
-| `server/report.ts` | `server/index.ts` | 根据 `error` 数量决定状态，生成 HTML/Markdown | 没有 Excel、动态证据、问题归并和置信度说明 |
-| `server/default-rules.ts` | `server/index.ts` | 解析默认阈值、严重级别和忽略选择器 | 没有输入模式、动态策略和证据置信度配置 |
-| `src/types.ts` | 前端及全部服务端模块 | 定义共享配置、元素、问题和报告模型 | 数据模型只表达展平元素与单张截图 |
+| `src/App.tsx` | 浏览器用户 | 收集一个 Figma Frame、一个 H5 URL 和 YAML，展示报告 | 不支持实际截图、批量 PagePair 和 Excel |
+| `server/index.ts` | `src/App.tsx` | 把 HTTP 字段转换为 ReviewService 输入 | 仍是同步原型接口，没有公共任务资源模型 |
+| `server/review.ts` | `server/index.ts` | 统一串联规则、DesignTruth、Live/Screenshot/Hybrid/Long Screenshot ActualEvidence、动态归一化、比对、AI 和报告 | 长图当前是一张设计长图对一张实际长图，不执行状态导航 |
+| `server/design.ts` | `server/review.ts` | 从 Figma 构建渲染图、节点树、组件、Variant、布局和样式证据 | 尚未解析 Variables 或外部组件完整节点树 |
+| `server/capture.ts` | `server/review.ts`、`server/demo.ts` | 在同一页面会话采集 1–5 帧；长图 Hybrid 按每片 `scrollY` 复用会话采集，输出元素指纹、父子关系、子树签名、变化摘要和像素方差图 | 不负责解释动态区域的业务语义 |
+| `server/screenshot.ts` | `server/review.ts` | 校验截图格式、设备 viewport、DPR、方向、裁剪和视觉锚点，生成 Screenshot ActualEvidence 与多图方差 | OCR/视觉锚点由上游适配器提供 |
+| `server/hybrid.ts` | `server/review.ts` | 拟合截图锚点与 Live DOM 锚点的几何映射；高置信时投影，失败时降级 Screenshot | 当前使用 scale/translate，不处理透视变换 |
+| `server/long-screenshot.ts` | `server/review.ts` | 校验长图有效内容区，按目标 viewport 分片；有 H5 时逐片构建 Hybrid，识别吸顶副本、懒加载空白和拼接缝，并聚合绝对坐标问题 | OCR/视觉锚点仍由上游适配器提供；未对齐分片降级 Screenshot |
+| `server/dynamic.ts` | `server/compare.ts` | 用至少 3 帧验证单个及列表行内动态行情数值，并输出窄范围 DynamicRegion 与 NormalizationStrategy | 尚未支持更多动态类型 |
+| `server/market-list.ts` | `server/compare.ts` | 联合 Figma 层级和重复 DOM 子树识别表头、行模板与列绑定 | 当前聚焦单层行情列表 |
+| `server/market-variant.ts` | `server/compare.ts` | 通过设计证据映射涨跌/平盘或中性 Variant，并检查目标颜色与图标 | 尚未解析 Variables |
+| `server/compare.ts` | `server/review.ts` | 交集匹配并输出 EvidenceConfidence；归一化动态数值；执行稳定像素、列表模板、Variant 和参数规则 | 每个 PagePair 及长图分片独立执行 |
+| `server/review-issue.ts` | `server/compare.ts` | 将同区域像素证据归入确定性主问题，保留不同根因，分配 P0/P1/P2/Pending，并约束 Agent 文案改写 | 尚未生成红框裁剪和 Excel |
+| `server/ai.ts` | `server/review.ts` | 为歧义动态候选生成固定 Schema AgentHypothesis，并可根据最终问题生成建议 | Agent 不直接控制门禁 |
+| `server/report.ts` | `server/review.ts` | 根据 `error` 数量决定状态，让 JSON、HTML、Markdown 消费同一组 ReviewIssue | 没有 Excel |
+| `server/default-rules.ts` | `server/review.ts` | 解析默认阈值、严重级别、匹配置信度、忽略选择器和多帧采样预算 | 没有输入模式和动态语义策略配置 |
+| `src/types.ts` | 前端及全部服务端模块 | 定义 DesignTruth、四类证据输入、长图分片/异常、HybridAlignment、DynamicRegion、MarketVariant、MarketList、ReviewIssue 和报告模型 | 原生端采集模型仍待扩展 |
 
 ### 5.2 应继续保留的原则
 
-- Figma 或基准图片是设计真值；
+- Figma 是设计真值；
 - 固定 viewport、DPR、色彩模式和字体等待条件；
 - AI 不决定通过/不通过；
 - `error` 才阻断验收，低置信度问题降级为 `pending`；
@@ -536,14 +550,14 @@ Agent 可以生成归并和说明建议，但归并后的每个参数必须能�
 
 ### 14.2 设计输入
 
-`server/design.ts` 从 `DesignSource` 演进为 `DesignTruth` 构建器：
+`server/design.ts` 已实现 `DesignTruth` 构建器：
 
 - 保留节点父子关系；
 - 提取 Component、Instance 和 Variant；
 - 保留 Auto Layout、文字样式、图标和图片信息；
 - 输出 Figma 节点渲染区域，而不只展平为无层级元素。
 
-调用者：`server/index.ts` 或新的 `server/review.ts`。
+调用者：`server/review.ts`。
 
 ### 14.3 实际证据适配器
 
@@ -654,7 +668,7 @@ MCP 不应引入业务流程、测试用例编排或模型直接门禁，也不�
 ### 17.1 必须完成
 
 - 批量接收多个页面配对，每个配对保持一对一；
-- 支持 Figma + H5、Figma +截图、Hybrid 三种模式；
+- 支持 Figma + H5、Figma + 截图、Hybrid 和 Figma + 长截图四种模式；
 - 从 Figma 保留节点树、组件和 Variant 证据；
 - H5 连续采集 3–5 帧；
 - 黑盒识别动态行情数值和重复列表；
@@ -695,13 +709,14 @@ MCP 不应引入业务流程、测试用例编排或模型直接门禁，也不�
 
 ## 19. 当前原型到目标能力的最短路径
 
-1. 扩展共享类型和 Figma 结构模型；
-2. 将单帧 `capturePage()` 改造成多帧 `ActualEvidence` 采集；
-3. 实现像素方差图、动态文字检测和重复列表识别；
-4. 引入结构化 Agent 假设与确定性验证器；
-5. 让 `compare.ts` 支持稳定区域与动态区域分开计分；
-6. 实现交集比对和低置信度降级；
-7. 实现问题归并、红框局部图和 Excel；
-8. 用真实金融 H5 样本校准阈值，再决定是否扩展长截图和移动端。
+1. ~~扩展共享类型和 Figma 结构模型；~~
+2. ~~将单帧 `capturePage()` 改造成多帧 `ActualEvidence` 采集；~~
+3. ~~实现像素方差图、动态文字检测和重复列表识别；~~
+4. ~~引入结构化 Agent 假设与确定性验证器；~~
+5. ~~让 `compare.ts` 支持稳定区域与动态区域分开计分；~~
+6. ~~实现交集比对和低置信度降级；~~
+7. ~~完成问题归并、红框局部图和 Excel；~~
+8. ~~扩展长截图分片、吸顶去重、采集异常和绝对坐标回溯；~~
+9. 用真实金融 H5 样本校准阈值，再决定是否扩展移动端采集。
 
 这条路径保留了当前原型已经验证的设计输入、Playwright 采集、像素比对、参数规则和报告基础，同时把新增复杂度限定在动态证据层。

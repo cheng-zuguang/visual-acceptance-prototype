@@ -1,6 +1,6 @@
 # 提供公共 MCP 薄适配层
 
-Status: ready-for-agent
+Status: ready-for-human
 
 Type: AFK
 
@@ -12,13 +12,13 @@ User stories: US-06
 
 ## Acceptance criteria
 
-- [ ] MCP 提供创建、查询、获取结果和列出制品能力
-- [ ] 长时间任务返回 Review 标识，不保持同步调用直到完成
-- [ ] MCP 与公共 HTTP API 使用相同的服务身份和权限边界
-- [ ] 状态、验收结论、错误码和制品语义与 HTTP API 一致
-- [ ] MCP 输出不包含 Figma Token、浏览器凭据或内部 Agent 提示词
-- [ ] 契约测试证明 MCP 和 HTTP 入口对同一 Review 返回一致结果
-- [ ] 走查核心不存在 MCP 专用分支或复制实现
+- [x] MCP 提供创建、查询、获取结果和列出制品能力
+- [x] 长时间任务返回 Review 标识，不保持同步调用直到完成
+- [x] MCP 与公共 HTTP API 使用相同的服务身份和权限边界
+- [x] 状态、验收结论、错误码和制品语义与 HTTP API 一致
+- [x] MCP 输出不包含 Figma Token、浏览器凭据或内部 Agent 提示词
+- [x] 契约测试证明 MCP 和 HTTP 入口对同一 Review 返回一致结果
+- [x] 走查核心不存在 MCP 专用分支或复制实现
 
 ## Blocked by
 
@@ -28,3 +28,8 @@ User stories: US-06
 - [18 发送签名完成 Webhook](./18-deliver-signed-review-webhooks.md)
 
 ## Comments
+
+- 2026-09-09：新增 `server/mcp.ts`，通过配置的公共 API 服务身份提供 `review.create`、`review.get`、`review.get_result` 和 `review.list_artifacts`；所有结果和错误体均由 `/v1` 原样返回。
+- 2026-09-09：新增 `server/mcp-stdio.ts` 与 `npm run mcp`，使用 `DIFFLAB_API_BASE_URL`、`DIFFLAB_SERVICE_TOKEN` 启动 stdio MCP Server；工具参数不承载原始凭据。
+- 2026-09-09：新增 MCP/HTTP 契约测试，覆盖异步创建、同一 Review 状态、完成结果、签名制品元数据和 Scope 拒绝；全量 138 项测试、类型检查、生产构建及生产依赖审计均通过。
+- 2026-09-09：MCP 与 `/v1` 增加可选 AI 配置；默认从 `DIFFLAB_AI_ENABLED`、`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 读取，`review.create.ai` 可按字段覆盖且不会进入公共结果；更新后全量 143 项测试与生产构建通过。

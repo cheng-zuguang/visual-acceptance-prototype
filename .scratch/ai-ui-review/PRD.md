@@ -14,7 +14,7 @@ Status: accepted
 
 - **US-01**：设计人员可对一个 Figma Frame 与一个 H5 页面进行一对一走查。
 - **US-02**：动态行情数值、列表及涨跌 Variant 不产生错误告警。
-- **US-03**：支持 Live、Screenshot 和 Hybrid 实际证据。
+- **US-03**：支持 Live、Screenshot、Hybrid 和 Long Screenshot 实际证据。
 - **US-04**：输出可直接交付的 Excel 与红框截图。
 - **US-05**：一次运行多个独立 PagePair。
 - **US-06**：其他服务通过公共接口调用走查能力。
@@ -42,32 +42,32 @@ Status: accepted
 
 | Issue | Title | Type | Status |
 | --- | --- | --- | --- |
-| [01](./issues/01-run-static-page-pair-through-review-service.md) | 通过统一 ReviewService 运行现有静态 PagePair | AFK | ready-for-agent |
-| [02](./issues/02-build-structured-design-truth.md) | 为一个 Figma Frame 构建结构化 DesignTruth | AFK | ready-for-agent |
-| [03](./issues/03-match-intersection-with-evidence-confidence.md) | 采用交集匹配并输出 EvidenceConfidence | AFK | ready-for-agent |
+| [01](./issues/01-run-static-page-pair-through-review-service.md) | 通过统一 ReviewService 运行现有静态 PagePair | AFK | ready-for-human |
+| [02](./issues/02-build-structured-design-truth.md) | 为一个 Figma Frame 构建结构化 DesignTruth | AFK | ready-for-human |
+| [03](./issues/03-match-intersection-with-evidence-confidence.md) | 采用交集匹配并输出 EvidenceConfidence | AFK | ready-for-human |
 | [04](./issues/04-build-financial-h5-gold-set.md) | 建立金融 H5 人工标注样本集 | HITL | ready-for-human |
-| [05](./issues/05-capture-multi-sample-live-evidence.md) | 采集多帧 Live ActualEvidence | AFK | ready-for-agent |
-| [06](./issues/06-normalize-dynamic-market-value.md) | 归一化单个动态行情数值 | AFK | ready-for-agent |
-| [07](./issues/07-verify-ambiguous-agent-hypothesis.md) | 用受限 AgentHypothesis 处理歧义动态区域 | AFK | ready-for-agent |
-| [08](./issues/08-map-market-variants.md) | 映射非统一命名的 MarketVariant | AFK | ready-for-agent |
-| [09](./issues/09-review-dynamic-market-list-template.md) | 按行模板审查动态行情列表 | AFK | ready-for-agent |
-| [10](./issues/10-build-screenshot-actual-evidence.md) | 使用实际截图构建 ActualEvidence | AFK | ready-for-agent |
-| [11](./issues/11-run-hybrid-device-screenshot-review.md) | 运行 Hybrid 设备截图走查 | AFK | ready-for-agent |
-| [12](./issues/12-aggregate-low-level-diffs-into-review-issues.md) | 把底层差异归并为 ReviewIssue | AFK | ready-for-agent |
-| [13](./issues/13-generate-excel-with-annotated-evidence.md) | 生成红框证据图与 Excel 报告 | AFK | ready-for-agent |
-| [14](./issues/14-run-batch-page-pairs.md) | 批量运行多个独立 PagePair | AFK | ready-for-agent |
-| [15](./issues/15-submit-live-review-through-public-api.md) | 通过安全异步 API 走查一个 Live PagePair | AFK | ready-for-agent |
-| [16](./issues/16-submit-screenshot-and-hybrid-through-public-api.md) | 通过公共 API 运行 Screenshot/Hybrid 走查 | AFK | ready-for-agent |
-| [17](./issues/17-support-idempotent-batch-public-reviews.md) | 支持批量公共调用与幂等提交 | AFK | ready-for-agent |
-| [18](./issues/18-deliver-signed-review-webhooks.md) | 发送签名完成 Webhook | AFK | ready-for-agent |
+| [05](./issues/05-capture-multi-sample-live-evidence.md) | 采集多帧 Live ActualEvidence | AFK | ready-for-human |
+| [06](./issues/06-normalize-dynamic-market-value.md) | 归一化单个动态行情数值 | AFK | ready-for-human |
+| [07](./issues/07-verify-ambiguous-agent-hypothesis.md) | 用受限 AgentHypothesis 处理歧义动态区域 | AFK | ready-for-human |
+| [08](./issues/08-map-market-variants.md) | 映射非统一命名的 MarketVariant | AFK | ready-for-human |
+| [09](./issues/09-review-dynamic-market-list-template.md) | 按行模板审查动态行情列表 | AFK | ready-for-human |
+| [10](./issues/10-build-screenshot-actual-evidence.md) | 使用实际截图构建 ActualEvidence | AFK | ready-for-human |
+| [11](./issues/11-run-hybrid-device-screenshot-review.md) | 运行 Hybrid 设备截图走查 | AFK | ready-for-human |
+| [12](./issues/12-aggregate-low-level-diffs-into-review-issues.md) | 把底层差异归并为 ReviewIssue | AFK | ready-for-human |
+| [13](./issues/13-generate-excel-with-annotated-evidence.md) | 生成红框证据图与 Excel 报告 | AFK | ready-for-human |
+| [14](./issues/14-run-batch-page-pairs.md) | 批量运行多个独立 PagePair | AFK | ready-for-human |
+| [15](./issues/15-submit-live-review-through-public-api.md) | 通过安全异步 API 走查一个 Live PagePair | AFK | ready-for-human |
+| [16](./issues/16-submit-screenshot-and-hybrid-through-public-api.md) | 通过公共 API 运行 Screenshot/Hybrid 走查 | AFK | ready-for-human |
+| [17](./issues/17-support-idempotent-batch-public-reviews.md) | 支持批量公共调用与幂等提交 | AFK | ready-for-human |
+| [18](./issues/18-deliver-signed-review-webhooks.md) | 发送签名完成 Webhook | AFK | ready-for-human |
 | [19](./issues/19-calibrate-first-release-thresholds.md) | 校准阈值并确认首版发布标准 | HITL | ready-for-human |
 
 ## Follow-up backlog
 
 | Issue | Title | Type | Status |
 | --- | --- | --- | --- |
-| [20](./issues/20-review-long-screenshots-in-tiles.md) | 分片审查长截图 | AFK | ready-for-agent |
-| [21](./issues/21-expose-review-service-through-mcp.md) | 提供公共 MCP 薄适配层 | AFK | ready-for-agent |
+| [20](./issues/20-review-long-screenshots-in-tiles.md) | 分片审查长截图 | AFK | ready-for-human |
+| [21](./issues/21-expose-review-service-through-mcp.md) | 提供公共 MCP 薄适配层 | AFK | ready-for-human |
 | [22](./issues/22-add-native-mobile-and-mini-program-capture.md) | 接入移动端和小程序原生采集器 | HITL | ready-for-human |
 
 ## Release evidence
