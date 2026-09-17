@@ -9,7 +9,6 @@ import {
   Code2,
   Download,
   Eye,
-  FileImage,
   Flame,
   FlaskConical,
   Globe2,
@@ -28,9 +27,14 @@ import {
   XCircle
 } from "lucide-react";
 import { useI18n } from "./i18n";
-import type { CompareError, CompareReport, Issue, Severity } from "./types";
+import { canContinueWithActualEvidence, type ActualEvidenceMode } from "./actual-mode";
+import { AgentMatchingDiagnosticsCard } from "./agent-matching-diagnostics-card";
+import { MarkdownContent } from "./markdown-content";
+import { buildStructureReportModel } from "./structure-report";
+import { DesignCoverageDetails, ModuleCoverageFindings } from "./design-coverage-details";
+import { AiAdvicePriorities } from "./ai-advice-priorities";
+import type { CompareError, CompareReport, Issue, ReviewIssue, Severity } from "./types";
 
-type DesignMode = "figma" | "image";
 type ViewerMode = "side" | "overlay" | "diff";
 type IssueFilter = "all" | Severity;
 
@@ -44,20 +48,22 @@ interface CredentialCache {
   modelsSourceUrl: string;
 }
 
-const CREDENTIAL_CACHE_KEY = "difflab.credentials.v1";
+const CREDENTIAL_CACHE_KEY = "difflab.credentials.v2";
+const LEGACY_CREDENTIAL_CACHE_KEY = "difflab.credentials.v1";
 const emptyCredentialCache: CredentialCache = {
   figmaToken: "",
   openaiKey: "",
   openaiApiUrl: "",
   openaiModel: "",
-  useAi: false,
+  useAi: true,
   aiModels: [],
   modelsSourceUrl: ""
 };
 
 function readCredentialCache(): CredentialCache {
   try {
-    const raw = window.localStorage.getItem(CREDENTIAL_CACHE_KEY);
+    const current = window.localStorage.getItem(CREDENTIAL_CACHE_KEY);
+    const raw = current ?? window.localStorage.getItem(LEGACY_CREDENTIAL_CACHE_KEY);
     if (!raw) return emptyCredentialCache;
     const value = JSON.parse(raw) as Partial<CredentialCache>;
     return {
@@ -65,7 +71,7 @@ function readCredentialCache(): CredentialCache {
       openaiKey: typeof value.openaiKey === "string" ? value.openaiKey : "",
       openaiApiUrl: typeof value.openaiApiUrl === "string" ? value.openaiApiUrl : "",
       openaiModel: typeof value.openaiModel === "string" ? value.openaiModel : "",
-      useAi: value.useAi === true,
+      useAi: current ? value.useAi !== false : true,
       aiModels: Array.isArray(value.aiModels)
         ? value.aiModels.filter((model): model is string => typeof model === "string")
         : [],
@@ -90,6 +96,13 @@ function downloadText(content: string, filename: string, type: string) {
   anchor.download = filename;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+function downloadRemote(url: string, filename: string) {
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
 }
 
 function downloadDataUrl(dataUrl: string, filename: string) {
@@ -131,14 +144,18 @@ function StepRail({ step }: { step: number }) {
 }
 
 function SourceStep(props: {
-  designMode: DesignMode;
-  setDesignMode: (mode: DesignMode) => void;
+  actualMode: ActualEvidenceMode;
+  setActualMode: (value: ActualEvidenceMode) => void;
   figmaUrl: string;
   setFigmaUrl: (value: string) => void;
   h5Url: string;
   setH5Url: (value: string) => void;
-  designFile?: File;
-  setDesignFile: (file?: File) => void;
+  screenshots: File[];
+  setScreenshots: (value: File[]) => void;
+  screenshotDpr: string;
+  setScreenshotDpr: (value: string) => void;
+  longScreenshotViewportHeight: string;
+  setLongScreenshotViewportHeight: (value: string) => void;
   figmaToken: string;
   setFigmaToken: (value: string) => void;
   openaiKey: string;
@@ -159,7 +176,7 @@ function SourceStep(props: {
   busy: boolean;
 }) {
   const { locale, t } = useI18n();
-  const fileInput = useRef<HTMLInputElement>(null);
+  const screenshotInput = useRef<HTMLInputElement>(null);
   const [fetchingModels, setFetchingModels] = useState(false);
   const [modelPanelOpen, setModelPanelOpen] = useState(false);
   const [modelMessage, setModelMessage] = useState<{ kind: "success" | "error"; text: string }>();
@@ -168,9 +185,14 @@ function SourceStep(props: {
   const filteredModels = normalizedModel && !hasExactModel
     ? props.aiModels.filter((model) => model.toLowerCase().includes(normalizedModel))
     : props.aiModels;
-  const canContinue =
-    Boolean(props.h5Url.trim()) &&
-    (props.designMode === "figma" ? Boolean(props.figmaUrl.trim()) : Boolean(props.designFile));
+  const longScreenshotMetadataValid = props.actualMode !== "long_screenshot" || (
+    Number(props.screenshotDpr) > 0 && Number(props.longScreenshotViewportHeight) > 0
+  );
+  const canContinue = Boolean(props.figmaUrl.trim()) && longScreenshotMetadataValid && canContinueWithActualEvidence(
+    props.actualMode,
+    props.h5Url,
+    props.screenshots.length
+  );
 
   useEffect(() => {
     if (props.aiModels.length > 0 && props.openaiApiUrl.trim() !== props.modelsSourceUrl) {
@@ -235,54 +257,105 @@ function SourceStep(props: {
             <span className="card-number">01</span>
             <div><h2>{t("source.design.title")}</h2><p>{t("source.design.description")}</p></div>
           </header>
-          <div className="segmented" role="tablist" aria-label={t("source.design.aria")}>
-            <button type="button" role="tab" aria-selected={props.designMode === "figma"} className={props.designMode === "figma" ? "selected" : ""} onClick={() => props.setDesignMode("figma")}>
-              <Link2 size={15} /> Figma Frame
-            </button>
-            <button type="button" role="tab" aria-selected={props.designMode === "image"} className={props.designMode === "image" ? "selected" : ""} onClick={() => props.setDesignMode("image")}>
-              <FileImage size={15} /> {t("source.design.upload")}
-            </button>
-          </div>
-          {props.designMode === "figma" ? (
-            <label className="field">
-              <span>{t("source.figma.label")}</span>
-              <div className="input-shell"><Link2 size={17} /><input value={props.figmaUrl} onChange={(event) => props.setFigmaUrl(event.target.value)} placeholder="https://www.figma.com/design/...?...node-id=..." /></div>
-              <small>{t("source.figma.help")}</small>
-            </label>
-          ) : (
-            <>
-            <input ref={fileInput} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => props.setDesignFile(event.target.files?.[0])} />
-            <button
-              type="button"
-              className={`upload-zone ${props.designFile ? "has-file" : ""}`}
-              onClick={() => fileInput.current?.click()}
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={(event) => {
-                event.preventDefault();
-                props.setDesignFile(event.dataTransfer.files[0]);
-              }}
-            >
-              <span className="upload-icon"><UploadCloud size={20} /></span>
-              {props.designFile ? <><b>{props.designFile.name}</b><small>{(props.designFile.size / 1024 / 1024).toFixed(2)} MB · {t("source.upload.replace")}</small></> : <><b>{t("source.upload.drop")}</b><small>{t("source.upload.help")}</small></>}
-            </button>
-            </>
-          )}
+          <label className="field">
+            <span>{t("source.figma.label")}</span>
+            <div className="input-shell"><Link2 size={17} /><input type="url" value={props.figmaUrl} onChange={(event) => props.setFigmaUrl(event.target.value)} placeholder="https://www.figma.com/design/...?...node-id=..." /></div>
+            <small>{t("source.figma.help")}</small>
+          </label>
         </article>
 
         <article className="form-card">
           <header className="card-heading">
             <span className="card-number">02</span>
-            <div><h2>{t("source.h5.title")}</h2><p>{t("source.h5.description")}</p></div>
+            <div><h2>{t("source.actual.title")}</h2><p>{t("source.actual.description")}</p></div>
           </header>
-          <label className="field">
-            <span>{t("source.h5.url")}</span>
-            <div className="input-shell"><Eye size={17} /><input value={props.h5Url} onChange={(event) => props.setH5Url(event.target.value)} placeholder="https://example.com/page" /></div>
-          </label>
+          <fieldset className="actual-mode-fieldset">
+            <legend className="visually-hidden">{t("source.actual.mode")}</legend>
+            <div className="segmented actual-mode-options">
+              {(["live", "screenshot", "hybrid", "long_screenshot"] as const).map((mode) => (
+                <label className={props.actualMode === mode ? "selected" : ""} key={mode}>
+                  <input className="visually-hidden" type="radio" name="actual-mode" value={mode} checked={props.actualMode === mode} onChange={() => props.setActualMode(mode)} />
+                  {mode === "live" ? <Eye size={15} /> : mode === "screenshot" ? <UploadCloud size={15} /> : <Layers3 size={15} />}
+                  <span>{t(`source.actual.${mode}`)}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          {(props.actualMode === "live" || props.actualMode === "hybrid" || props.actualMode === "long_screenshot") && (
+            <label className="field actual-source-field">
+              <span>{t(props.actualMode === "long_screenshot" ? "source.longScreenshot.h5Url" : "source.h5.url")}</span>
+              <div className="input-shell"><Eye size={17} /><input id="h5-url" name="h5Url" type="url" aria-describedby="h5-url-help" value={props.h5Url} onChange={(event) => props.setH5Url(event.target.value)} placeholder="https://example.com/page" /></div>
+              <small id="h5-url-help">{t(props.actualMode === "long_screenshot" ? "source.longScreenshot.h5Help" : "source.h5.description")}</small>
+            </label>
+          )}
+          {(props.actualMode === "screenshot" || props.actualMode === "hybrid" || props.actualMode === "long_screenshot") && (
+            <div className="field actual-source-field">
+              <span>{t("source.screenshot.label")}</span>
+              <input ref={screenshotInput} className="visually-hidden" type="file" name="screenshots" multiple={props.actualMode !== "long_screenshot"} accept="image/png,image/jpeg,image/webp" onChange={(event) => props.setScreenshots(Array.from(event.target.files ?? []).slice(0, props.actualMode === "long_screenshot" ? 1 : 5))} />
+              <button
+                type="button"
+                className={`upload-zone ${props.screenshots.length ? "has-file" : ""}`}
+                onClick={() => screenshotInput.current?.click()}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  props.setScreenshots(Array.from(event.dataTransfer.files).filter((file) => ["image/png", "image/jpeg", "image/webp"].includes(file.type)).slice(0, props.actualMode === "long_screenshot" ? 1 : 5));
+                }}
+              >
+                <span className="upload-icon"><UploadCloud size={20} /></span>
+                {props.screenshots.length
+                  ? <><b>{t("source.screenshot.selected", { count: props.screenshots.length })}</b><small>{props.screenshots.map((file) => file.name).join(" · ")}</small></>
+                  : <><b>{t("source.screenshot.drop")}</b><small>{t(props.actualMode === "long_screenshot" ? "source.longScreenshot.uploadHelp" : "source.screenshot.help")}</small></>}
+              </button>
+            </div>
+          )}
+          {props.actualMode === "long_screenshot" && (
+            <div className="long-screenshot-fields">
+              <label className="field">
+                <span>{t("source.longScreenshot.dpr")}</span>
+                <div className="input-shell"><input name="screenshotDpr" type="number" min="0.5" step="0.5" inputMode="decimal" value={props.screenshotDpr} onChange={(event) => props.setScreenshotDpr(event.target.value)} /></div>
+              </label>
+              <label className="field">
+                <span>{t("source.longScreenshot.viewportHeight")}</span>
+                <div className="input-shell"><input name="longScreenshotViewportHeight" type="number" min="1" step="1" inputMode="numeric" value={props.longScreenshotViewportHeight} onChange={(event) => props.setLongScreenshotViewportHeight(event.target.value)} /></div>
+              </label>
+              <small>{t("source.longScreenshot.help")}</small>
+            </div>
+          )}
         </article>
 
         <details className="credential-card">
-          <summary><span><KeyRound size={17} />{t("credentials.title")}</span><ChevronDown size={17} /></summary>
+          <summary>
+            <span><KeyRound size={17} />{t("credentials.title")}</span>
+            <span className="credential-summary-actions">
+              <span className={`ai-summary-status ${props.useAi ? "enabled" : ""}`}>
+                {t(props.useAi ? "credentials.ai.stateOn" : "credentials.ai.stateOff")}
+              </span>
+              <ChevronDown size={17} />
+            </span>
+          </summary>
           <div className="credential-body">
+            <div className={`ai-review-toggle ${props.useAi ? "enabled" : ""}`}>
+              <span className="ai-review-icon"><Sparkles size={18} /></span>
+              <span className="ai-review-copy">
+                <b id="ai-review-title">{t("credentials.ai.title")}</b>
+                <small id="ai-review-help">{t("credentials.ai.help")}</small>
+              </span>
+              <label className="ai-review-control" htmlFor="use-ai-review">
+                <span id="ai-review-status" className="ai-review-state" aria-live="polite">
+                  {t(props.useAi ? "credentials.ai.stateOn" : "credentials.ai.stateOff")}
+                </span>
+                <input
+                  id="use-ai-review"
+                  name="useAi"
+                  type="checkbox"
+                  checked={props.useAi}
+                  aria-labelledby="ai-review-title"
+                  aria-describedby="ai-review-help ai-review-status"
+                  onChange={(event) => props.setUseAi(event.target.checked)}
+                />
+              </label>
+            </div>
             <label className="field"><span>Figma Access Token</span><div className="input-shell"><ShieldCheck size={17} /><input type="password" autoComplete="off" value={props.figmaToken} onChange={(event) => props.setFigmaToken(event.target.value)} placeholder={t("credentials.figma.placeholder")} /></div></label>
             <label className="field"><span>{t("credentials.apiUrl.label")}</span><div className="input-shell"><Link2 size={17} /><input type="url" autoComplete="off" value={props.openaiApiUrl} onChange={(event) => props.setOpenaiApiUrl(event.target.value)} placeholder={t("credentials.apiUrl.placeholder")} /></div><small>{t("credentials.apiUrl.help")}</small></label>
             <label className="field"><span>{t("credentials.apiKey.label")}</span><div className="input-shell"><Sparkles size={17} /><input type="password" autoComplete="off" value={props.openaiKey} onChange={(event) => props.setOpenaiKey(event.target.value)} placeholder={t("credentials.apiKey.placeholder")} /></div></label>
@@ -349,7 +422,6 @@ function SourceStep(props: {
               </div>
               {modelMessage && <small className={`model-${modelMessage.kind}`} aria-live="polite">{modelMessage.text}</small>}
             </div>
-            <label className="toggle-row"><span><b>{t("credentials.ai.title")}</b><small>{t("credentials.ai.help")}</small></span><input type="checkbox" checked={props.useAi} onChange={(event) => props.setUseAi(event.target.checked)} /></label>
             <div className="credential-cache-note">
               <ShieldCheck size={17} />
               <span><b>{t("credentials.cache.title")}</b><small>{t("credentials.cache.help")}</small></span>
@@ -427,22 +499,37 @@ function LoadingReport({ stage }: { stage: number }) {
   );
 }
 
-function IssueBox({ issue, viewport }: { issue?: Issue; viewport: CompareReport["viewport"] }) {
-  if (!issue?.box) return null;
-  const style = {
-    left: `${(issue.box.x / viewport.width) * 100}%`,
-    top: `${(issue.box.y / viewport.height) * 100}%`,
-    width: `${(issue.box.width / viewport.width) * 100}%`,
-    height: `${(issue.box.height / viewport.height) * 100}%`
-  };
-  return <span className={`issue-box ${issue.severity}`} style={style}><i>{issue.id.replace("issue-", "#")}</i></span>;
+type EvidenceSide = "design" | "actual";
+
+function issueBoxFor(issue: ReviewIssue, side: EvidenceSide): Issue["box"] | undefined {
+  return side === "design"
+    ? issue.designBox ?? issue.location.designBox ?? issue.box ?? issue.location.box
+    : issue.actualBox ?? issue.location.actualBox ?? issue.box ?? issue.location.box;
 }
 
-function ImageCanvas(props: { src: string; alt: string; report: CompareReport; issue?: Issue; className?: string }) {
-  return <div className={`image-canvas ${props.className ?? ""}`} style={{ aspectRatio: `${props.report.viewport.width}/${props.report.viewport.height}` }}><img src={props.src} alt={props.alt} /><IssueBox issue={props.issue} viewport={props.report.viewport} /></div>;
+function IssueAnnotations(props: { report: CompareReport; side: EvidenceSide; selectedIssue?: ReviewIssue; onSelect: (issue: ReviewIssue) => void }) {
+  const { t } = useI18n();
+  const positioned = props.report.issues
+    .map((issue) => ({ issue, box: issueBoxFor(issue, props.side) }))
+    .filter((entry): entry is { issue: ReviewIssue; box: NonNullable<Issue["box"]> } => Boolean(entry.box))
+    .sort((a, b) => (b.box.width * b.box.height) - (a.box.width * a.box.height));
+  return <div className="issue-annotations">{positioned.map(({ issue, box }) => {
+    const selected = props.selectedIssue?.id === issue.id;
+    const style = {
+      left: `${(box.x / props.report.viewport.width) * 100}%`,
+      top: `${(box.y / props.report.viewport.height) * 100}%`,
+      width: `${(box.width / props.report.viewport.width) * 100}%`,
+      height: `${(box.height / props.report.viewport.height) * 100}%`
+    };
+    return <button type="button" className={`issue-box ${issue.severity} ${selected ? "selected" : ""}`} style={style} aria-pressed={selected} aria-label={t("viewer.selectIssue", { id: issue.id.replace("issue-", "#"), title: issue.title })} key={issue.id} onClick={() => props.onSelect(issue)}><i aria-hidden="true">{issue.id.replace("issue-", "#")}</i></button>;
+  })}</div>;
 }
 
-function CompareViewer({ report, selectedIssue }: { report: CompareReport; selectedIssue?: Issue }) {
+function ImageCanvas(props: { src: string; alt: string; report: CompareReport; side: EvidenceSide; selectedIssue?: ReviewIssue; onSelect: (issue: ReviewIssue) => void; className?: string }) {
+  return <div className={`image-canvas ${props.className ?? ""}`} style={{ aspectRatio: `${props.report.viewport.width}/${props.report.viewport.height}` }}><img src={props.src} alt={props.alt} /><IssueAnnotations report={props.report} side={props.side} selectedIssue={props.selectedIssue} onSelect={props.onSelect} /></div>;
+}
+
+function CompareViewer({ report, selectedIssue, onSelect }: { report: CompareReport; selectedIssue?: ReviewIssue; onSelect: (issue: ReviewIssue) => void }) {
   const { t } = useI18n();
   const [mode, setMode] = useState<ViewerMode>("side");
   const [opacity, setOpacity] = useState(50);
@@ -454,18 +541,19 @@ function CompareViewer({ report, selectedIssue }: { report: CompareReport; selec
           <button type="button" role="tab" aria-selected={mode === "overlay"} className={mode === "overlay" ? "selected" : ""} onClick={() => setMode("overlay")}><Layers3 size={14} />{t("viewer.overlay")}</button>
           <button type="button" role="tab" aria-selected={mode === "diff"} className={mode === "diff" ? "selected" : ""} onClick={() => setMode("diff")}><Flame size={14} />{t("viewer.diff")}</button>
         </div>
-        <span className="viewport-badge">{report.viewport.width} × {report.viewport.height} · DPR 1</span>
+        <div className="viewer-context"><span>{t("viewer.selectHelp")}</span><span className="viewport-badge">{report.viewport.width} × {report.viewport.height} · DPR 1</span></div>
       </header>
-      {mode === "side" && <div className="side-view"><div><label>{t("viewer.reference")}</label><ImageCanvas src={report.images.reference} alt={t("viewer.reference")} report={report} issue={selectedIssue} /></div><div><label>{t("viewer.actual")}</label><ImageCanvas src={report.images.actual} alt={t("viewer.actual")} report={report} issue={selectedIssue} /></div></div>}
-      {mode === "overlay" && <div className="overlay-view"><div className="image-canvas" style={{ aspectRatio: `${report.viewport.width}/${report.viewport.height}` }}><img src={report.images.reference} alt={t("viewer.reference")} /><img className="overlay-image" style={{ opacity: opacity / 100 }} src={report.images.actual} alt={t("viewer.overlayAlt")} /><IssueBox issue={selectedIssue} viewport={report.viewport} /></div><label className="opacity-control"><span>{t("viewer.design")}</span><input type="range" min="0" max="100" value={opacity} onChange={(event) => setOpacity(Number(event.target.value))} /><span>H5 · {opacity}%</span></label></div>}
-      {mode === "diff" && <div className="diff-view"><ImageCanvas src={report.images.diff} alt={t("viewer.diffAlt")} report={report} issue={selectedIssue} /><p>{t("viewer.diffHelp")}</p></div>}
+      {mode === "side" && <div className="side-view"><div><label>{t("viewer.reference")}</label><ImageCanvas src={report.images.reference} alt={t("viewer.reference")} report={report} side="design" selectedIssue={selectedIssue} onSelect={onSelect} /></div><div><label>{t("viewer.actual")}</label><ImageCanvas src={report.images.actual} alt={t("viewer.actual")} report={report} side="actual" selectedIssue={selectedIssue} onSelect={onSelect} /></div></div>}
+      {mode === "overlay" && <div className="overlay-view"><div className="image-canvas" style={{ aspectRatio: `${report.viewport.width}/${report.viewport.height}` }}><img src={report.images.reference} alt={t("viewer.reference")} /><img className="overlay-image" style={{ opacity: opacity / 100 }} src={report.images.actual} alt={t("viewer.overlayAlt")} /><IssueAnnotations report={report} side="actual" selectedIssue={selectedIssue} onSelect={onSelect} /></div><label className="opacity-control"><span>{t("viewer.design")}</span><input type="range" min="0" max="100" value={opacity} onChange={(event) => setOpacity(Number(event.target.value))} /><span>H5 · {opacity}%</span></label></div>}
+      {mode === "diff" && <div className="diff-view"><ImageCanvas src={report.images.diff} alt={t("viewer.diffAlt")} report={report} side="actual" selectedIssue={selectedIssue} onSelect={onSelect} /><p>{t("viewer.diffHelp")}</p></div>}
     </section>
   );
 }
 
-function IssueList(props: { report: CompareReport; selected?: Issue; onSelect: (issue: Issue) => void }) {
+function IssueList(props: { report: CompareReport; selected?: ReviewIssue; onSelect: (issue: ReviewIssue) => void }) {
   const { t } = useI18n();
   const [filter, setFilter] = useState<IssueFilter>("all");
+  const scrollRef = useRef<HTMLDivElement>(null);
   const counts = useMemo(() => ({
     all: props.report.issues.length,
     error: props.report.issues.filter((issue) => issue.severity === "error").length,
@@ -474,24 +562,124 @@ function IssueList(props: { report: CompareReport; selected?: Issue; onSelect: (
     info: props.report.issues.filter((issue) => issue.severity === "info").length
   }), [props.report]);
   const issues = filter === "all" ? props.report.issues : props.report.issues.filter((issue) => issue.severity === filter);
+  useEffect(() => {
+    if (!props.selected || !scrollRef.current) return;
+    const container = scrollRef.current;
+    const row = container.querySelector<HTMLElement>(`[data-issue-id="${props.selected.id}"]`);
+    if (!row) return;
+    const rowTop = row.offsetTop;
+    const rowBottom = rowTop + row.offsetHeight;
+    if (rowTop < container.scrollTop) container.scrollTop = rowTop;
+    else if (rowBottom > container.scrollTop + container.clientHeight) container.scrollTop = rowBottom - container.clientHeight;
+  }, [props.selected]);
   return (
     <aside className="issue-panel">
       <header><div><span className="mono-label">{t("issues.eyebrow")}</span><h2>{t("issues.title")} <em>{props.report.issues.length}</em></h2></div><SlidersHorizontal size={17} /></header>
       <div className="filter-row">{(["all", "error", "warning", "pending"] as const).map((value) => <button type="button" aria-pressed={filter === value} key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{value === "all" ? t("issues.all") : t(`severity.${value}`)}<span>{counts[value]}</span></button>)}</div>
-      <div className="issue-scroll">
+      <div className="issue-scroll" ref={scrollRef}>
         {issues.length === 0 && <div className="empty-issues"><CheckCircle2 size={24} /><b>{t("issues.empty")}</b></div>}
         {issues.map((issue) => {
           const Icon = severityIcons[issue.severity];
-          return <button type="button" aria-pressed={props.selected?.id === issue.id} className={`issue-row ${issue.severity} ${props.selected?.id === issue.id ? "selected" : ""}`} key={issue.id} onClick={() => props.onSelect(issue)}><span className="severity-icon"><Icon size={16} /></span><span className="issue-copy"><small>{issue.category} · {issue.id.replace("issue-", "#")}</small><b>{issue.title}</b><p>{issue.summary}</p>{issue.selector && <code>{issue.selector}</code>}<span className="suggestion"><ArrowRight size={13} />{issue.suggestion}</span></span>{typeof issue.confidence === "number" && <span className="confidence">{Math.round(issue.confidence * 100)}%</span>}</button>;
+          const confidencePercent = Math.round(issue.evidenceConfidence.score * 100);
+          return <button type="button" data-issue-id={issue.id} aria-pressed={props.selected?.id === issue.id} className={`issue-row ${issue.severity} ${props.selected?.id === issue.id ? "selected" : ""}`} key={issue.id} onClick={() => props.onSelect(issue)}><span className="severity-icon"><Icon size={16} /></span><span className="issue-copy"><small>{issue.category} · {issue.id.replace("issue-", "#")}</small><b>{issue.title}</b><p>{issue.summary}</p>{issue.selector && <code>{issue.selector}</code>}<span className="suggestion"><ArrowRight size={13} />{issue.suggestion}</span></span><span className={`confidence ${issue.evidenceConfidence.level}`} title={t("issues.confidenceHelp", { percent: confidencePercent })}><small>{t("issues.confidence")}</small><b>{confidencePercent}%</b><em>{t(`issues.confidence.${issue.evidenceConfidence.level}`)}</em></span></button>;
         })}
       </div>
     </aside>
   );
 }
 
-function ReportStep({ report, onReset }: { report: CompareReport; onReset: () => void }) {
+function StructureCompletenessCard(props: {
+  report: CompareReport;
+  onSelectIssue: (issue: ReviewIssue) => void;
+}) {
   const { t } = useI18n();
-  const [selected, setSelected] = useState<Issue | undefined>(report.issues[0]);
+  const model = useMemo(() => buildStructureReportModel(props.report), [props.report]);
+  if (!model.visible) return null;
+
+  return (
+    <section className="structure-card" aria-labelledby="structure-card-title">
+      <header>
+        <span className="structure-card-icon" aria-hidden="true"><Layers3 size={20} /></span>
+        <span>
+          <small className="mono-label">{t("report.structure.eyebrow")}</small>
+          <h2 id="structure-card-title">{t("report.structure.title")}</h2>
+          <p>{t("report.structure.help")}</p>
+          {model.incomplete && <p role="alert" className="review-incomplete">{t("report.structure.incomplete")}</p>}
+          {model.coverageIncomplete && <p role="alert" className="review-incomplete">{t("report.structure.coverageIncomplete")}</p>}
+        </span>
+        <dl className="structure-totals">
+          <div><dt>{t("report.structure.confirmed")}</dt><dd>{model.confirmed.length}</dd></div>
+          <div><dt>{t("report.structure.unpublished")}</dt><dd>{model.unpublished.length + model.pendingModules.length}</dd></div>
+          <div><dt>{t("report.structure.unmatched")}</dt><dd>{model.unmatchedDesignCount}</dd></div>
+        </dl>
+      </header>
+
+      <ModuleCoverageFindings issues={props.report.issues} title={t("report.structure.moduleVerification")} onSelect={props.onSelectIssue} />
+
+      {model.confirmed.length > 0 && (
+        <div className="structure-section confirmed">
+          <h3><ShieldCheck size={16} aria-hidden="true" />{t("report.structure.confirmedTitle")}</h3>
+          <ul>
+            {model.confirmed.map(({ issue, designPath, evaluation }) => (
+              <li key={issue.id}>
+                <span className="structure-item-copy">
+                  <small>{designPath.join(" / ") || issue.figmaNodeId}</small>
+                  <b>{issue.title}</b>
+                  <p>{issue.summary}</p>
+                  {evaluation?.designFlowGapPx !== undefined && (
+                    <span className="structure-evidence">
+                      {t("report.structure.flowEvidence", {
+                        gap: evaluation.designFlowGapPx,
+                        shift: evaluation.displacementStepPx ?? "-",
+                        residual: evaluation.residualPx ?? "-"
+                      })}
+                    </span>
+                  )}
+                </span>
+                <button type="button" onClick={() => props.onSelectIssue(issue)}>
+                  {t("report.structure.openIssue")}<ArrowRight size={13} aria-hidden="true" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {model.unpublished.length > 0 && (
+        <div className="structure-section unpublished">
+          <h3><AlertTriangle size={16} aria-hidden="true" />{t("report.structure.unpublishedTitle")}</h3>
+          <ul>
+            {model.unpublished.map((candidate) => (
+              <li key={candidate.candidateId}>
+                <span className="structure-item-copy">
+                  <small>{candidate.designPath.join(" / ") || candidate.figmaNodeId}</small>
+                  <b>{t("report.structure.notPublished")}</b>
+                  <p>{candidate.rejectionReasons.map((reason) =>
+                    t(`report.structure.reason.${reason}`)
+                  ).join(" · ")}</p>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {model.confirmed.length === 0 && model.unpublished.length === 0 && (
+        <p className="structure-unmatched-note">
+          <AlertTriangle size={16} aria-hidden="true" />
+          {t("report.structure.unmatchedOnly", { count: model.unmatchedDesignCount })}
+        </p>
+      )}
+    </section>
+  );
+}
+
+function ReportStep({ report, onReset }: { report: CompareReport; onReset: () => void }) {
+  const { t, locale } = useI18n();
+  const comparisonRef = useRef<HTMLDivElement>(null);
+  const [selected, setSelected] = useState<ReviewIssue | undefined>(report.issues[0]);
+  const xlsx = report.artifacts?.xlsx;
+  const zip = report.artifacts?.zip;
   const exportJson = () => {
     const { reportHtml: _html, markdown: _markdown, images: _images, ...result } = report;
     downloadText(JSON.stringify(result, null, 2), `difflab-${report.id}.json`, "application/json");
@@ -499,17 +687,28 @@ function ReportStep({ report, onReset }: { report: CompareReport; onReset: () =>
   return (
     <section className="report-workspace">
       <header className={`report-hero ${report.status}`}>
-        <div className="report-verdict"><span className="verdict-icon">{report.status === "passed" ? <CheckCircle2 size={24} /> : <XCircle size={24} />}</span><div><span className="mono-label">{t("report.eyebrow")}</span><h1>{report.status === "passed" ? t("report.passed") : t("report.failed")}</h1><p>{report.source.design} · {report.source.h5}</p></div></div>
-        <div className="report-actions"><button className="ghost-button" onClick={onReset}><RotateCcw size={15} />{t("report.new")}</button><div className="download-menu"><button className="primary-button compact"><Download size={15} />{t("report.export")}<ChevronDown size={14} /></button><div><button onClick={() => downloadText(report.reportHtml, `difflab-${report.id}.html`, "text/html")}>{t("report.export.html")}</button><button onClick={() => downloadText(report.markdown, `difflab-${report.id}.md`, "text/markdown")}>{t("report.export.markdown")}</button><button onClick={exportJson}>{t("report.export.json")}</button><button onClick={() => downloadDataUrl(report.images.diff, `difflab-${report.id}-diff.png`)}>{t("report.export.diff")}</button></div></div></div>
+        <div className="report-verdict"><span className="verdict-icon">{report.status === "passed" ? <CheckCircle2 size={24} /> : <XCircle size={24} />}</span><div><span className="mono-label">{t("report.eyebrow")}</span><h1>{report.status === "passed" ? t("report.passed") : report.status === "needs_review" ? (locale === "en" ? "Needs review" : "待复核") : t("report.failed")}</h1><p>{report.source.design} · {report.source.actual}</p></div></div>
+        <div className="report-actions"><button className="ghost-button" onClick={onReset}><RotateCcw size={15} />{t("report.new")}</button><div className="download-menu"><button className="primary-button compact"><Download size={15} />{t("report.export")}<ChevronDown size={14} /></button><div>{zip && <button className="download-all" onClick={() => downloadRemote(zip.downloadUrl, zip.filename)}>{t("report.export.all")}</button>}<button onClick={() => downloadText(report.reportHtml, `difflab-${report.id}.html`, "text/html")}>{t("report.export.html")}</button><button onClick={() => downloadText(report.markdown, `difflab-${report.id}.md`, "text/markdown")}>{t("report.export.markdown")}</button>{xlsx && <button onClick={() => downloadRemote(xlsx.downloadUrl, xlsx.filename)}>{t("report.export.xlsx")}</button>}<button onClick={exportJson}>{t("report.export.json")}</button><button onClick={() => downloadDataUrl(report.images.diff, `difflab-${report.id}-diff.png`)}>{t("report.export.diff")}</button></div></div></div>
       </header>
+      {report.matching.visualScope && <p className="review-scope-note">{locale === "en" ? "Pixel scope · reviewed / exempt / full image" : "像素范围 · 已审查 / 已豁免 / 整图"}: {report.matching.visualScope.reviewedPixels.toLocaleString()} / {report.matching.visualScope.excludedPixels.toLocaleString()} / {report.matching.visualScope.canvasPixels.toLocaleString()}</p>}
+      {report.matching.designCoverage && <DesignCoverageDetails primary coverage={report.matching.designCoverage} title={locale === "en" ? "Design review checklist" : "设计走查清单"} locale={locale} images={report.images} onSelectIssue={id => { const issue = report.issues.find(item => item.id === id); if (issue) { setSelected(issue); comparisonRef.current?.scrollIntoView({ block: "start", behavior: "instant" }); } }} />}
+      {report.aiAdvice && <section className="ai-card"><header><span className="ai-card-icon"><Sparkles size={20} /></span><span><b>{t("report.ai.title")}</b><small>{t("report.ai.help")}{report.aiAdvice.model ? ` · ${report.aiAdvice.model}` : ""}</small></span></header>
+        <p className="ai-reading-guide">{locale === "en" ? `${report.aiAdvice.priorities.length} suggestion groups. Locate issue opens the comparison below. Pending items still require verification.` : `共 ${report.aiAdvice.priorities.length} 组建议。点击「定位问题」跳到下方对照图；待核验项不代表已确认缺失。`}</p>
+        {report.aiAdviceRejection && <p className="ai-partial-warning">{locale === "en" ? "AI suggestions are incomplete; see the failure diagnostic." : "AI 建议未完整生成，以下仅为已完成部分。"}</p>}
+        <details className="ai-summary-details"><summary>{locale === "en" ? "Full summary" : "完整汇总原文"}</summary><MarkdownContent markdown={report.aiAdvice.summary} /></details>
+        <AiAdvicePriorities priorities={report.aiAdvice.priorities} issues={report.issues} regions={report.matching.pageAlignment.regions} label={t("report.ai.details")} locale={locale} onSelect={issue => { setSelected(issue); comparisonRef.current?.scrollIntoView({ block: "start", behavior: "instant" }); comparisonRef.current?.focus({ preventScroll: true }); }} /></section>}
+      <StructureCompletenessCard report={report} onSelectIssue={setSelected} />
+      <AgentMatchingDiagnosticsCard evidence={report.matching.semanticAgent} t={t} />
       <div className="metrics-grid">
-        <article className="metric-card score"><span>{t("report.similarity")}</span><strong>{(report.summary.similarity * 100).toFixed(2)}<small>%</small></strong><i style={{ "--score": `${report.summary.similarity * 100}%` } as React.CSSProperties} /></article>
+        <article className="metric-card score"><span>{t("report.similarity")}</span><strong>{(report.summary.stableSimilarity * 100).toFixed(2)}<small>%</small></strong><i style={{ "--score": `${report.summary.stableSimilarity * 100}%` } as React.CSSProperties} /></article>
+        <article className="metric-card dynamic"><span>{t("report.dynamicRatio")}</span><strong>{(report.summary.dynamicRegionAreaRatio * 100).toFixed(2)}<small>%</small></strong><small>{t("report.dynamicRegions", { count: report.dynamicNormalization.regions.length })}</small></article>
+        <article className="metric-card strategy"><span>{t("report.strategy")}</span><strong>{report.dynamicNormalization.strategies.join(", ") || t("report.strategy.none")}</strong></article>
         <article className="metric-card error"><span>{t("severity.error")}</span><strong>{report.summary.errors}</strong><small>{t("report.errorHelp")}</small></article>
         <article className="metric-card warning"><span>{t("severity.warning")}</span><strong>{report.summary.warnings}</strong><small>{t("report.warningHelp")}</small></article>
         <article className="metric-card pending"><span>{t("severity.pending")}</span><strong>{report.summary.pending}</strong><small>{t("report.pendingHelp")}</small></article>
-        <article className="metric-card matched"><span>{t("report.matched")}</span><strong>{report.summary.matchedElements}</strong><small>{t("report.duration", { seconds: (report.durationMs / 1000).toFixed(1) })}</small></article>
+        <article className="metric-card matched"><span>{t("report.matched")}</span><strong>{report.summary.matchedElements}</strong><small>{t("report.unmatched", { design: report.summary.unmatchedDesignElements, actual: report.summary.unmatchedActualElements })} · {t("report.duration", { seconds: (report.durationMs / 1000).toFixed(1) })}</small></article>
       </div>
-      <div className="report-body"><div className="visual-column"><CompareViewer report={report} selectedIssue={selected} />{report.aiAdvice && <section className="ai-card"><header><Sparkles size={17} /><span><b>{t("report.ai.title")}</b><small>{t("report.ai.help")}{report.aiAdvice.model ? ` · ${report.aiAdvice.model}` : ""}</small></span></header><p>{report.aiAdvice.summary}</p><ol>{report.aiAdvice.priorities.map((item) => <li key={item.title}><b>{item.title}</b><span>{item.reason}</span><strong>{item.action}</strong></li>)}</ol></section>}<details className="diagnostic-card"><summary>{t("report.diagnostics")} <span>{report.diagnostics.length}</span></summary><ul>{report.diagnostics.map((item) => <li key={item}>{item}</li>)}</ul></details></div><IssueList report={report} selected={selected} onSelect={setSelected} /></div>
+      <div className="report-body" ref={comparisonRef} tabIndex={-1} aria-label={locale === "en" ? "Issue comparison" : "问题对照"}><div className="visual-column"><CompareViewer report={report} selectedIssue={selected} onSelect={setSelected} /><details className="diagnostic-card"><summary>{t("report.diagnostics")} <span>{report.diagnostics.length}</span></summary><ul>{report.diagnostics.map((item) => <li key={item}>{item}</li>)}</ul></details></div><IssueList report={report} selected={selected} onSelect={setSelected} /></div>
     </section>
   );
 }
@@ -518,10 +717,12 @@ export function App() {
   const { locale, setLocale, t } = useI18n();
   const [initialCredentials] = useState(readCredentialCache);
   const [step, setStep] = useState(1);
-  const [designMode, setDesignMode] = useState<DesignMode>("figma");
+  const [actualMode, setActualMode] = useState<ActualEvidenceMode>("live");
   const [figmaUrl, setFigmaUrl] = useState("");
   const [h5Url, setH5Url] = useState("");
-  const [designFile, setDesignFile] = useState<File>();
+  const [screenshots, setScreenshots] = useState<File[]>([]);
+  const [screenshotDpr, setScreenshotDpr] = useState("1");
+  const [longScreenshotViewportHeight, setLongScreenshotViewportHeight] = useState("844");
   const [figmaToken, setFigmaToken] = useState(initialCredentials.figmaToken);
   const [openaiKey, setOpenaiKey] = useState(initialCredentials.openaiKey);
   const [openaiApiUrl, setOpenaiApiUrl] = useState(initialCredentials.openaiApiUrl);
@@ -594,9 +795,9 @@ export function App() {
         response = await fetch("/api/demo-compare", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rulesYaml, useAi, openaiKey, openaiApiUrl, openaiModel, locale }) });
       } else {
         const body = new FormData();
-        body.set("h5Url", h5Url); body.set("rulesYaml", rulesYaml); body.set("figmaToken", figmaToken); body.set("openaiKey", openaiKey); body.set("openaiApiUrl", openaiApiUrl); body.set("openaiModel", openaiModel); body.set("useAi", String(useAi)); body.set("locale", locale);
-        if (designMode === "figma") body.set("figmaUrl", figmaUrl);
-        else if (designFile) body.set("designImage", designFile);
+        body.set("actualMode", actualMode); body.set("h5Url", h5Url); body.set("rulesYaml", rulesYaml); body.set("figmaToken", figmaToken); body.set("openaiKey", openaiKey); body.set("openaiApiUrl", openaiApiUrl); body.set("openaiModel", openaiModel); body.set("useAi", String(useAi)); body.set("locale", locale); body.set("screenshotDpr", screenshotDpr); body.set("longScreenshotViewportHeight", longScreenshotViewportHeight);
+        body.set("figmaUrl", figmaUrl);
+        screenshots.forEach((file) => body.append("screenshots", file));
         response = await fetch("/api/compare", { method: "POST", body });
       }
       setReport(await readResponse(response));
@@ -612,6 +813,7 @@ export function App() {
   const clearCredentials = () => {
     try {
       window.localStorage.removeItem(CREDENTIAL_CACHE_KEY);
+      window.localStorage.removeItem(LEGACY_CREDENTIAL_CACHE_KEY);
     } catch {
       // 浏览器禁用本地存储时，仍清空当前页面中的凭据。
     }
@@ -621,7 +823,7 @@ export function App() {
     setOpenaiModel("");
     setAiModels([]);
     setModelsSourceUrl("");
-    setUseAi(false);
+    setUseAi(true);
   };
 
   return (
@@ -630,7 +832,7 @@ export function App() {
       <header className="app-header"><a className="brand" href="/prototype/visual-qa"><span className="brand-mark"><i /><i /><i /><i /></span><span>DiffLab<small>{t("app.subtitle")}</small></span></a><StepRail step={step} /><div className="header-tools"><span className="prototype-pill">{t("app.prototype")}</span><div className="language-switch" role="group" aria-label={t("language.label")}><Globe2 size={14} /><button type="button" className={locale === "zh-CN" ? "active" : ""} aria-pressed={locale === "zh-CN"} onClick={() => setLocale("zh-CN")}>{t("language.zh")}</button><button type="button" className={locale === "en" ? "active" : ""} aria-pressed={locale === "en"} onClick={() => setLocale("en")}>{t("language.en")}</button></div></div></header>
       {error && <div className="error-banner"><XCircle size={17} /><span><b>{t("error.title")}</b>{error}</span><button onClick={() => setError("")}>{t("error.close")}</button></div>}
       <main id="main-content" tabIndex={-1}>
-        {step === 1 && <SourceStep designMode={designMode} setDesignMode={setDesignMode} figmaUrl={figmaUrl} setFigmaUrl={setFigmaUrl} h5Url={h5Url} setH5Url={setH5Url} designFile={designFile} setDesignFile={setDesignFile} figmaToken={figmaToken} setFigmaToken={setFigmaToken} openaiKey={openaiKey} setOpenaiKey={setOpenaiKey} openaiApiUrl={openaiApiUrl} setOpenaiApiUrl={setOpenaiApiUrl} openaiModel={openaiModel} setOpenaiModel={setOpenaiModel} aiModels={aiModels} setAiModels={setAiModels} modelsSourceUrl={modelsSourceUrl} setModelsSourceUrl={setModelsSourceUrl} useAi={useAi} setUseAi={setUseAi} onClearCredentials={clearCredentials} onContinue={() => setStep(2)} onDemo={() => run(true)} busy={busy} />}
+        {step === 1 && <SourceStep actualMode={actualMode} setActualMode={setActualMode} figmaUrl={figmaUrl} setFigmaUrl={setFigmaUrl} h5Url={h5Url} setH5Url={setH5Url} screenshots={screenshots} setScreenshots={setScreenshots} screenshotDpr={screenshotDpr} setScreenshotDpr={setScreenshotDpr} longScreenshotViewportHeight={longScreenshotViewportHeight} setLongScreenshotViewportHeight={setLongScreenshotViewportHeight} figmaToken={figmaToken} setFigmaToken={setFigmaToken} openaiKey={openaiKey} setOpenaiKey={setOpenaiKey} openaiApiUrl={openaiApiUrl} setOpenaiApiUrl={setOpenaiApiUrl} openaiModel={openaiModel} setOpenaiModel={setOpenaiModel} aiModels={aiModels} setAiModels={setAiModels} modelsSourceUrl={modelsSourceUrl} setModelsSourceUrl={setModelsSourceUrl} useAi={useAi} setUseAi={setUseAi} onClearCredentials={clearCredentials} onContinue={() => setStep(2)} onDemo={() => run(true)} busy={busy} />}
         {step === 2 && <RulesStep rulesYaml={rulesYaml} setRulesYaml={(value) => { rulesEdited.current = true; setRulesYaml(value); }} defaultYaml={defaultYaml} onBack={() => setStep(1)} onRun={() => run(false)} busy={busy} />}
         {step === 3 && (busy || !report ? <LoadingReport stage={loadingStage} /> : <ReportStep report={report} onReset={reset} />)}
       </main>
