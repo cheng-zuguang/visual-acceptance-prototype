@@ -1,0 +1,4 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>设计走查清单 · 回放</title><body><main id="preview" style="max-width:1100px;margin:32px auto"></main><script type="module">
+import React from 'react';import {createRoot} from 'react-dom/client';import {DesignCoverageDetails} from '/src/design-coverage-details.tsx';import '/src/styles.css';
+const report=await fetch('./report.json').then(r=>r.json());createRoot(document.getElementById('preview')).render(React.createElement(DesignCoverageDetails,{coverage:report.matching.designCoverage,title:'设计走查清单 · 真实采集回放',primary:true,images:report.images}));
+</script></body></html>
