@@ -7,7 +7,7 @@ services:
     container_name: difflab
     restart: unless-stopped
     ports:
-      - "${HOST_PORT:-14318}:4318"
+      - "127.0.0.1:${HOST_PORT:-14318}:4318"
     environment:
       - NODE_ENV=production
       - PORT=4318
@@ -17,5 +17,6 @@ services:
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
       - OPENAI_MODEL=${OPENAI_MODEL:-}
       - CHROMIUM_FLAGS=${CHROMIUM_FLAGS:-}
+      - DIFFLAB_ALLOWED_CLIENT_IPS=${DIFFLAB_ALLOWED_CLIENT_IPS:-}
     # Headless Chromium needs sufficient shared memory for heavy page renders
     shm_size: "1gb"
