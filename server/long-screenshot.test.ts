@@ -499,6 +499,56 @@ test("reviews an uploaded long screenshot with H5 evidence for every viewport ti
   );
 });
 
+test("downgrades only the long-screenshot tile whose Live evidence did not reach its scroll offset", async () => {
+  const image = await stripedImage(240);
+  const truth = design(image);
+  truth.source = { kind: "figma", fileKey: "FILE_KEY", frameId: "1:2", frameName: "长行情页" };
+  const service = new ReviewService({
+    dependencies: {
+      buildDesignTruthFromFigma: async () => truth as never,
+      captureLiveActualEvidenceAtScrollOffsets: async (_url, _viewport, scrollYs) =>
+        Promise.all(scrollYs.map(async (scrollY) => {
+          const evidence = await liveTile(scrollY);
+          evidence.samples[0].scroll = scrollY === 100
+            ? { target: "unresolved", requestedY: 100, actualY: 0, scrollHeight: 100, clientHeight: 100 }
+            : { target: "document", selector: "html", requestedY: scrollY, actualY: scrollY, scrollHeight: 240, clientHeight: 100 };
+          return { scrollY, evidence };
+        }))
+    }
+  });
+  const anchors = [0, 100, 200].flatMap((scrollY) => [
+    { text: `title-${scrollY}`, confidence: 0.99, box: { x: 10, y: scrollY + 5, width: 30, height: 10 } },
+    { text: `nav-${scrollY}`, confidence: 0.99, box: { x: 10, y: scrollY + 17, width: 30, height: 10 } },
+    { text: `price-${scrollY}`, confidence: 0.99, box: { x: 10, y: scrollY + 29, width: 30, height: 10 } }
+  ]);
+
+  const report = await service.reviewLongScreenshotPagePair({
+    locale: "zh-CN",
+    design: {
+      kind: "figma",
+      frameUrl: "https://www.figma.com/design/FILE_KEY/long?node-id=1-2",
+      accessToken: "figma-token"
+    },
+    h5Url: "https://h5.test/market",
+    screenshot: {
+      name: "market-long.png",
+      image,
+      device: {
+        platform: "iOS",
+        dpr: 1,
+        orientation: "portrait",
+        viewport: { width: 100, height: 100 }
+      },
+      anchors
+    }
+  });
+
+  assert.equal(report.longScreenshot?.effectiveMode, "hybrid");
+  assert.equal(report.longScreenshot?.hybridTileCount, 2);
+  assert.deepEqual(report.longScreenshot?.tileAlignments?.map(({ tileIndex }) => tileIndex), [0, 2]);
+  assert.match(report.diagnostics.join("\n"), /滚动位置 100px.*Screenshot/);
+});
+
 test("long screenshot property checks and actual-only entries retain full-image coordinates", async () => {
   const image = await stripedImage(240);
   const truth = design(image);

@@ -3,6 +3,7 @@ import sharp from "sharp";
 import type {
   AcceptanceConfig,
   ActualEvidenceElement,
+  ActualScrollPosition,
   Box,
   DomElement,
   ElementStyle,
@@ -13,6 +14,7 @@ import { localText, type Locale } from "./i18n";
 
 export interface PageCapture {
   coverage?: import("../src/types").ActualCaptureCoverage;
+  scroll?: ActualScrollPosition;
   image: Buffer;
   elements: DomElement[];
   audits: StaticAudit[];
@@ -23,7 +25,7 @@ export interface PageCapture {
 export interface LiveCaptureSession {
   finalUrl: string;
   diagnostics: string[];
-  captureSample: (scrollY?: number) => Promise<Pick<PageCapture, "image" | "elements" | "audits" | "coverage">>;
+  captureSample: (scrollY?: number) => Promise<Pick<PageCapture, "image" | "elements" | "audits" | "coverage" | "scroll">>;
   close: () => Promise<void>;
 }
 
@@ -736,6 +738,101 @@ async function capturePreparedPage(
   };
 }
 
+async function scrollPageToOffset(
+  page: import("playwright").Page,
+  targetY: number,
+  viewport: { width: number; height: number }
+): Promise<ActualScrollPosition> {
+  return page.evaluate(({ targetY, viewportWidth, viewportHeight }) => {
+    const requiredHeight = targetY + viewportHeight;
+    const currentHeight = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
+    const innerScrollers = Array.from(document.body.querySelectorAll<HTMLElement>("*"))
+      .filter((element) => {
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return /auto|scroll/.test(style.overflowY) &&
+          element.scrollHeight > element.clientHeight + 1 &&
+          element.scrollHeight - element.clientHeight >= targetY &&
+          rect.width >= viewportWidth * 0.7 &&
+          rect.height >= viewportHeight * 0.5 &&
+          rect.right > 0 && rect.bottom > 0 &&
+          rect.left < viewportWidth && rect.top < viewportHeight;
+      })
+      .sort((left, right) => {
+        const leftBox = left.getBoundingClientRect();
+        const rightBox = right.getBoundingClientRect();
+        return rightBox.width * rightBox.height - leftBox.width * leftBox.height;
+      });
+    const requiresInnerScroller = currentHeight <= viewportHeight + 1 || requiredHeight > currentHeight;
+    if (requiresInnerScroller && innerScrollers.length > 1) {
+      return {
+        target: "unresolved" as const,
+        requestedY: targetY,
+        actualY: window.scrollY,
+        scrollHeight: currentHeight,
+        clientHeight: document.documentElement.clientHeight
+      };
+    }
+    if (requiresInnerScroller && innerScrollers.length === 1) {
+      const target = innerScrollers[0];
+      target.scrollTo(0, targetY);
+      const selector = (() => {
+        if (target.id && document.querySelectorAll(`#${CSS.escape(target.id)}`).length === 1) {
+          return `#${CSS.escape(target.id)}`;
+        }
+        const parts: string[] = [];
+        let cursor: Element | null = target;
+        while (cursor && cursor !== document.body) {
+          let part = cursor.tagName.toLowerCase();
+          const parentElement: Element | null = cursor.parentElement;
+          if (parentElement) {
+            const siblings = (Array.from(parentElement.children) as Element[])
+              .filter(sibling => sibling.tagName === cursor!.tagName);
+            if (siblings.length > 1) part += `:nth-of-type(${siblings.indexOf(cursor) + 1})`;
+          }
+          parts.unshift(part);
+          cursor = parentElement;
+        }
+        return `body > ${parts.join(" > ")}`;
+      })();
+      return {
+        target: "element" as const,
+        selector,
+        requestedY: targetY,
+        actualY: target.scrollTop,
+        scrollHeight: target.scrollHeight,
+        clientHeight: target.clientHeight
+      };
+    }
+    let spacer = document.querySelector<HTMLElement>("[data-difflab-scroll-spacer]");
+    if (requiredHeight > currentHeight) {
+      if (!spacer) {
+        spacer = document.createElement("div");
+        spacer.dataset.difflabScrollSpacer = "true";
+        spacer.dataset.difflabBaseHeight = String(currentHeight);
+        spacer.setAttribute("aria-hidden", "true");
+        spacer.style.cssText = `position:absolute;left:0;top:${currentHeight}px;width:1px;pointer-events:none;visibility:hidden`;
+        document.body.append(spacer);
+      }
+      const baseHeight = Number(spacer.dataset.difflabBaseHeight ?? currentHeight);
+      spacer.style.height = `${Math.max(0, requiredHeight - baseHeight)}px`;
+    }
+    window.scrollTo(0, targetY);
+    return {
+      target: "document" as const,
+      selector: "html",
+      requestedY: targetY,
+      actualY: window.scrollY,
+      scrollHeight: Math.max(document.documentElement.scrollHeight, document.body.scrollHeight),
+      clientHeight: document.documentElement.clientHeight
+    };
+  }, {
+    targetY,
+    viewportWidth: Math.round(viewport.width),
+    viewportHeight: Math.round(viewport.height)
+  });
+}
+
 async function openPlaywrightCaptureSession(input: {
   url: string;
   viewport: { width: number; height: number };
@@ -880,28 +977,22 @@ async function openPlaywrightCaptureSession(input: {
       finalUrl: page.url(),
       diagnostics,
       captureSample: async (scrollY = 0) => {
-        await page.evaluate(({ targetY, viewportHeight }) => {
-          const requiredHeight = targetY + viewportHeight;
-          const currentHeight = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight);
-          let spacer = document.querySelector<HTMLElement>("[data-difflab-scroll-spacer]");
-          if (requiredHeight > currentHeight) {
-            if (!spacer) {
-              spacer = document.createElement("div");
-              spacer.dataset.difflabScrollSpacer = "true";
-              spacer.dataset.difflabBaseHeight = String(currentHeight);
-              spacer.setAttribute("aria-hidden", "true");
-              spacer.style.cssText = `position:absolute;left:0;top:${currentHeight}px;width:1px;pointer-events:none;visibility:hidden`;
-              document.body.append(spacer);
-            }
-            const baseHeight = Number(spacer.dataset.difflabBaseHeight ?? currentHeight);
-            spacer.style.height = `${Math.max(0, requiredHeight - baseHeight)}px`;
-          }
-          window.scrollTo(0, targetY);
-        }, { targetY: scrollY, viewportHeight: Math.round(input.viewport.height) });
+        const scroll = await scrollPageToOffset(page, scrollY, input.viewport);
+        if (scroll.target === "unresolved") {
+          const message = localText(
+            input.locale,
+            "检测到多个主滚动容器，未猜测长页面滚动目标。",
+            "Multiple dominant scroll containers were detected; the long-page scroll target was left unresolved."
+          );
+          if (!diagnostics.includes(message)) diagnostics.push(message);
+        }
         if (scrollY > 0 && input.config.capture.settleMs > 0) {
           await page.waitForTimeout(input.config.capture.settleMs);
         }
-        return capturePreparedPage(page, validIgnoreSelectors, input.viewport, input.locale);
+        return {
+          ...(await capturePreparedPage(page, validIgnoreSelectors, input.viewport, input.locale)),
+          scroll
+        };
       },
       close
     };

@@ -171,11 +171,21 @@ export interface StaticAudit {
 
 export interface ActualEvidenceSample {
   coverage?: ActualCaptureCoverage;
+  scroll?: ActualScrollPosition;
   index: number;
   capturedAtMs: number;
   image: Buffer;
   elements: ActualEvidenceElement[];
   audits: StaticAudit[];
+}
+
+export interface ActualScrollPosition {
+  target: "document" | "element" | "unresolved";
+  selector?: string;
+  requestedY: number;
+  actualY: number;
+  scrollHeight: number;
+  clientHeight: number;
 }
 
 export interface ActualCaptureCoverage {

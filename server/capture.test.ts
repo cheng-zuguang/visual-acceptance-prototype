@@ -563,6 +563,101 @@ test("captures viewport-relative Live ActualEvidence at every long-page scroll o
   }
 });
 
+test("captures every requested offset from a dominant inner scroll container", async () => {
+  const server = createServer((_request, response) => {
+    response.setHeader("content-type", "text/html; charset=utf-8");
+    response.end(`<!doctype html>
+      <style>
+        html, body { margin: 0; width: 100px; height: 100px; overflow: hidden }
+        #feed { position: fixed; inset: 0; width: 100px; height: 100px; overflow-y: auto }
+        #content { position: relative; height: 300px }
+        .marker { position: absolute; left: 10px; width: 30px; height: 20px }
+        #top { top: 5px } #middle { top: 105px } #bottom { top: 205px }
+      </style>
+      <main id="feed"><div id="content">
+        <div id="top" class="marker">top</div>
+        <div id="middle" class="marker">middle</div>
+        <div id="bottom" class="marker">bottom</div>
+      </div></main>`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  try {
+    const captures = await captureLiveActualEvidenceAtScrollOffsets(
+      `http://127.0.0.1:${address.port}`,
+      { width: 100, height: 100 },
+      [0, 100, 200],
+      parseAcceptanceYaml("capture:\n  samples: 1\n  settle_ms: 0\n  timeout_ms: 5000"),
+      "zh-CN"
+    );
+
+    assert.deepEqual(captures.map(({ evidence }) =>
+      evidence.samples[0].elements.find((element) =>
+        ["top", "middle", "bottom"].includes(element.text ?? "")
+      )?.text
+    ), ["top", "middle", "bottom"]);
+    assert.deepEqual(captures.map(({ evidence }) =>
+      evidence.samples[0].elements.find((element) =>
+        ["top", "middle", "bottom"].includes(element.text ?? "")
+      )?.box.y
+    ), [5, 5, 5]);
+    assert.deepEqual(captures.map(({ evidence }) => evidence.samples[0].scroll), [
+      { target: "element", selector: "#feed", requestedY: 0, actualY: 0, scrollHeight: 300, clientHeight: 100 },
+      { target: "element", selector: "#feed", requestedY: 100, actualY: 100, scrollHeight: 300, clientHeight: 100 },
+      { target: "element", selector: "#feed", requestedY: 200, actualY: 200, scrollHeight: 300, clientHeight: 100 }
+    ]);
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => error ? reject(error) : resolve())
+    );
+  }
+});
+
+test("does not guess when multiple dominant inner scroll containers can satisfy an offset", async () => {
+  const server = createServer((_request, response) => {
+    response.setHeader("content-type", "text/html; charset=utf-8");
+    response.end(`<!doctype html>
+      <style>
+        html, body { margin: 0; width: 100px; height: 100px; overflow: hidden }
+        .scroller { position: fixed; inset: 0; width: 100px; height: 100px; overflow-y: auto }
+        .content { height: 300px }
+      </style>
+      <section id="first" class="scroller"><div class="content">first</div></section>
+      <section id="second" class="scroller"><div class="content">second</div></section>`);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  try {
+    const [capture] = await captureLiveActualEvidenceAtScrollOffsets(
+      `http://127.0.0.1:${address.port}`,
+      { width: 100, height: 100 },
+      [100],
+      parseAcceptanceYaml("capture:\n  samples: 1\n  settle_ms: 0\n  timeout_ms: 5000"),
+      "zh-CN"
+    );
+
+    assert.deepEqual(capture.evidence.samples[0].scroll, {
+      target: "unresolved",
+      requestedY: 100,
+      actualY: 0,
+      scrollHeight: 100,
+      clientHeight: 100
+    });
+    assert.match(capture.evidence.diagnostics.join("\n"), /多个主滚动容器/);
+    assert.ok(capture.evidence.samples[0].coverage?.limitations?.filter(
+      (item) => item.reason === "scroll-container"
+    ).length === 2);
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => error ? reject(error) : resolve())
+    );
+  }
+});
+
 test("a percentage-declared probability bar exempts only data-driven width and retains height and color defects", async () => {
   const server = createServer((_req, res) => res.end('<style>body{margin:0}</style><div data-figma-id="track" style="width:200px;height:28px;background:#eee"><div data-figma-id="bar" style="width:50%;height:28px;background:#ff0000"></div></div><span data-figma-id="value">50%</span>'));
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));

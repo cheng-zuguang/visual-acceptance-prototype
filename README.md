@@ -172,6 +172,7 @@ docker run -d --name difflab --shm-size=1gb -p 127.0.0.1:14318:4318 difflab:late
 - [公共 HTTP API 详细文档](./docs/PUBLIC_HTTP_API.md)
 - [MCP 走查接口](./docs/MCP.md)
 - [公共服务 API 设计与实现边界](./docs/PUBLIC_API_DESIGN.md)
+- [生产部署（单容器与环境变量）](./docs/PRODUCTION_DEPLOYMENT.md)
 - [开发、验证与故障排查](./docs/DEVELOPMENT.md)
 - [原型验证记录](./PROTOTYPE_NOTES.md)
 - [MIT License](./LICENSE)（[中文参考译本](./LICENSE.zh-CN.md)）

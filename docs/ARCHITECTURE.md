@@ -44,7 +44,7 @@ flowchart LR
 | 设计真值 | `server/design.ts` | 从 Figma Frame 构建渲染图、递归节点树、组件/Variant、布局和样式证据 |
 | 页面采集 | `server/capture.ts` | 固定浏览器环境、等待页面稳定、截图，并提取 DOM 父子关系、子树签名与静态问题 |
 | 截图证据 | `server/screenshot.ts` | 校验 PNG/JPEG/WebP、设备 viewport、DPR、方向和裁剪，并生成多图变化证据 |
-| 长截图证据 | `server/long-screenshot.ts`、`server/capture.ts` | 校验有效内容区并按目标 viewport 分片；可选在同一 H5 会话按每片 `scrollY` 采集多帧 DOM/样式证据；识别吸顶副本、懒加载空白和拼接缝，并把问题汇总回长图绝对坐标 |
+| 长截图证据 | `server/long-screenshot.ts`、`server/capture.ts` | 校验有效内容区并按目标 viewport 分片；可选在同一 H5 会话按每片 `scrollY` 采集多帧 DOM/样式证据；记录 document 或唯一主内层滚动容器的请求/实际偏移，滚动目标歧义或未到达时仅把受影响分片降级为 Screenshot；识别吸顶副本、懒加载空白和拼接缝，并把问题汇总回长图绝对坐标 |
 | 混合证据 | `server/hybrid.ts` | 用截图视觉锚点与 Live DOM 锚点拟合几何映射，可信时投影 DOM，不可信时降级 |
 | 动态证据 | `server/dynamic.ts` | 用多帧轨迹验证单个行情数值，并生成窄范围对称归一化策略 |
 | 行情列表 | `server/market-list.ts` | 联合 Figma 表头/行模板层级与重复 DOM 子树，生成模板绑定和确定性列表证据 |
@@ -63,7 +63,7 @@ flowchart LR
 2. `ReviewService` 解析 YAML。缺失值使用默认配置，数值超出范围时会被钳制；内置 Demo 也调用同一服务。
 3. DesignTruth 构建器读取目标 Frame、以 scale 1 渲染 PNG，并保留递归节点树、父子关系、Frame/父节点相对几何、Component/Instance/Variant、Auto Layout、样式证据及 Figma 资源目录。
 4. 若规则指定固定 viewport，渲染视口和整棵节点树的两类相对几何按 X/Y 比例缩放。
-5. Live 由 Playwright 采集；Screenshot 校验设备元数据并规范化图片；Hybrid 按设备 viewport 采集 H5，再由标题、导航和表头等稳定锚点拟合几何映射；Long Screenshot 按单屏 viewport 分片并保留全页绝对坐标，携带 URL 时逐片形成 Hybrid，无法对齐的分片安全降级为 Screenshot。
+5. Live 由 Playwright 采集；Screenshot 校验设备元数据并规范化图片；Hybrid 按设备 viewport 采集 H5，再由标题、导航和表头等稳定锚点拟合几何映射；Long Screenshot 按单屏 viewport 分片并保留全页绝对坐标，携带 URL 时逐片形成 Hybrid。长页采集优先使用自然 document 滚动；document 不可达时只接受唯一、占据主要视口的内层纵向滚动容器，并记录请求偏移与实际偏移。多个主候选或未到达目标偏移时不猜测，只把对应分片安全降级为 Screenshot。
 6. Live 在同一会话采集 1–5 帧。Screenshot 可接收一张或多张图片；多图只形成变化证据，不会自动忽略无法确认的动态文字。Hybrid 仅在对齐置信度为 high 时投影 DOM，否则降级为 Screenshot。
 7. 比对引擎先完成节点匹配，再识别行情列表模板；重复行按列建立模板绑定，复用多帧行情数值归一化和 MarketVariant，并确定性检查表头、列、行、间距、分割线与对齐。
 8. 底层差异先归并为 ReviewIssue；同一元素的像素区域可作为确定性问题的关联证据，同一 `PageAlignmentPlan` 模块内的共同位移归并为一个模块根因，不同规则和局部偏移保持独立。Agent 只能改写文案，不能新增无证据参数。

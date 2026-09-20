@@ -588,6 +588,7 @@ export class ReviewService {
     const liveByScrollY = new Map(liveTiles.map((item) => [item.scrollY, item.evidence]));
     const comparisons = [];
     const tileAlignments: NonNullable<CompareReport["longScreenshot"]>["tileAlignments"] = [];
+    const liveTileDiagnostics: string[] = [];
     for (const tile of evidence.tiles) {
       const tileDesign = designTruthForLongScreenshotTile(design, evidence, tile.index);
       const tileEvidence = await this.dependencies.buildScreenshotActualEvidence({
@@ -606,8 +607,20 @@ export class ReviewService {
         locale: input.locale
       });
       const live = liveByScrollY.get(tile.scrollY);
-      const tileActual: ActualEvidence = live
-        ? this.dependencies.buildHybridActualEvidence({ screenshot: tileEvidence, live, locale: input.locale })
+      const usableLive = live && live.samples.every((sample) => !sample.scroll || (
+        sample.scroll.target !== "unresolved" &&
+        Math.abs(sample.scroll.requestedY - tile.scrollY) <= 1 &&
+        Math.abs(sample.scroll.actualY - tile.scrollY) <= 1
+      )) ? live : undefined;
+      if (live && !usableLive) {
+        liveTileDiagnostics.push(localText(
+          input.locale,
+          `Live 证据未到达滚动位置 ${tile.scrollY}px，该分片已降级为 Screenshot。`,
+          `Live evidence did not reach scroll offset ${tile.scrollY}px; this tile was downgraded to Screenshot.`
+        ));
+      }
+      const tileActual: ActualEvidence = usableLive
+        ? this.dependencies.buildHybridActualEvidence({ screenshot: tileEvidence, live: usableLive, locale: input.locale })
         : tileEvidence;
       if (tileActual.kind === "hybrid") {
         tileAlignments.push({
@@ -635,7 +648,8 @@ export class ReviewService {
     const diagnostics = [
       ...design.diagnostics,
       ...evidence.diagnostics,
-      ...liveTiles.flatMap((item) => item.evidence.diagnostics)
+      ...liveTiles.flatMap((item) => item.evidence.diagnostics),
+      ...liveTileDiagnostics
     ];
     const aiAdvice = await this.maybeGenerateAiAdvice({
       options: input.ai,
