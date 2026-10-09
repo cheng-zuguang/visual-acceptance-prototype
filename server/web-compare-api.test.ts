@@ -203,3 +203,40 @@ test("downloads one ZIP containing every report type exposed by the Web UI", asy
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 });
+
+test("local Web routes pass Jev overrides transiently and reject malformed providers", async () => {
+  const observed: Array<ReviewPagePairsInput["ai"]> = [];
+  const app = express();
+  app.use(express.json());
+  app.use(createWebCompareRouter({
+    executeReview: async input => { observed.push(input.ai); throw new Error("captured"); },
+    executeDemo: async input => { observed.push(input.ai); throw new Error("captured"); }
+  }));
+  app.use((_error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    res.status(400).json({ error: "rejected" });
+  });
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise<void>(resolve => server.once("listening", resolve));
+  const { port } = server.address() as AddressInfo;
+  const fields = { adviceProvider: "jev", jevApiKey: " transient-key ", jevModel: " jev-test " };
+  try {
+    const body = new FormData();
+    for (const [key, value] of Object.entries(fields)) body.set(key, value);
+    body.set("useAi", "true");
+    const response = await fetch(`http://127.0.0.1:${port}/api/compare`, { method: "POST", body });
+    assert.ok(!(await response.text()).includes("transient-key"));
+    await fetch(`http://127.0.0.1:${port}/api/demo-compare`, { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...fields, useAi: true }) });
+    assert.equal(observed.length, 2);
+    for (const ai of observed) {
+      assert.equal(ai?.adviceProvider, "jev");
+      assert.equal(ai?.jevApiKey, "transient-key");
+      assert.equal(ai?.jevModel, "jev-test");
+    }
+    await fetch(`http://127.0.0.1:${port}/api/demo-compare`, { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...fields, adviceProvider: "invalid" }) });
+    assert.equal(observed.length, 2);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});

@@ -14,11 +14,11 @@ import {
 } from "./ai";
 
 test("bounds the configurable element-binding timeout", () => {
-  assert.equal(resolveElementBindingTimeoutMs({}), 120_000);
+  assert.equal(resolveElementBindingTimeoutMs({}), 60_000);
   assert.equal(resolveElementBindingTimeoutMs({ DIFFLAB_AI_BINDING_TIMEOUT_MS: "120000" }), 120_000);
   assert.equal(resolveElementBindingTimeoutMs({ DIFFLAB_AI_BINDING_TIMEOUT_MS: "1000" }), 10_000);
   assert.equal(resolveElementBindingTimeoutMs({ DIFFLAB_AI_BINDING_TIMEOUT_MS: "999999" }), 180_000);
-  assert.equal(resolveElementBindingTimeoutMs({ DIFFLAB_AI_BINDING_TIMEOUT_MS: "invalid" }), 120_000);
+  assert.equal(resolveElementBindingTimeoutMs({ DIFFLAB_AI_BINDING_TIMEOUT_MS: "invalid" }), 60_000);
 });
 
 const groundedIssue: ReviewIssue = {
@@ -679,14 +679,17 @@ test("requests a structured PageAlignmentPlan before element bindings", async ()
           properties: {
             alignmentPlan: {
               properties: {
-                regions: { items: { properties: { status: { enum: string[] } } } };
+                regions: { maxItems: number; items: { properties: { status: { enum: string[] } } } };
               };
             };
+            bindings: { maxItems: number };
           };
         };
       };
     }).format.schema;
     assert.equal(schema.required.includes("alignmentPlan"), true);
+    assert.equal(schema.properties.alignmentPlan.properties.regions.maxItems, 40);
+    assert.equal(schema.properties.bindings.maxItems, 60);
     assert.deepEqual(
       schema.properties.alignmentPlan.properties.regions.items.properties.status.enum,
       ["matched", "missing-in-actual", "uncertain"]
@@ -705,4 +708,260 @@ test("requests a structured PageAlignmentPlan before element bindings", async ()
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("accepts a fenced structured element-binding response", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    output_text: "```json\n{\"pageSummary\":\"对应关系待核验\",\"alignmentPlan\":{\"regions\":[]},\"bindings\":[]}\n```"
+  }), { status: 200, headers: { "Content-Type": "application/json" } });
+  try {
+    const result = await generateElementBindings({
+      apiUrl: "https://api.example.test/v1",
+      model: "test-model",
+      request: { locale: "zh-CN", designCandidates: [], actualCandidates: [] },
+      referenceImage: Buffer.from("design"),
+      actualImage: Buffer.from("actual")
+    });
+    assert.equal(result.pageSummary, "对应关系待核验");
+    assert.deepEqual(result.alignmentPlan.regions, []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("reads the final output text when a response includes an earlier commentary block", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    output: [
+      { type: "reasoning", content: [{ type: "text", text: "I will compare the page." }] },
+      { type: "message", content: [{ type: "output_text", text: JSON.stringify({
+        pageSummary: "模块对应", alignmentPlan: { regions: [] }, bindings: []
+      }) }] }
+    ]
+  }), { status: 200, headers: { "Content-Type": "application/json" } });
+  try {
+    const result = await generateElementBindings({
+      apiUrl: "https://api.example.test/v1",
+      model: "test-model",
+      request: { locale: "zh-CN", designCandidates: [], actualCandidates: [] },
+      referenceImage: Buffer.from("design"),
+      actualImage: Buffer.from("actual")
+    });
+    assert.equal(result.pageSummary, "模块对应");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("uses the last final message when a compatible API emits multiple messages", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    output: [
+      { type: "message", content: [{ type: "output_text", text: "I will compare the page." }] },
+      { type: "message", content: [{ type: "output_text", text: JSON.stringify({
+        pageSummary: "最终判断", alignmentPlan: { regions: [] }, bindings: []
+      }) }] }
+    ]
+  }), { status: 200, headers: { "Content-Type": "application/json" } });
+  try {
+    const result = await generateElementBindings({
+      apiUrl: "https://api.example.test/v1",
+      model: "test-model",
+      request: { locale: "zh-CN", designCandidates: [], actualCandidates: [] },
+      referenceImage: Buffer.from("design"),
+      actualImage: Buffer.from("actual")
+    });
+    assert.equal(result.pageSummary, "最终判断");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("rejects a partial element-binding result as a format error", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    output_text: JSON.stringify({ pageSummary: "分析完成", alignmentPlan: { regions: [] } })
+  }), { status: 200, headers: { "Content-Type": "application/json" } });
+  try {
+    await assert.rejects(generateElementBindings({
+      apiUrl: "https://api.example.test/v1",
+      model: "test-model",
+      request: { locale: "zh-CN", designCandidates: [], actualCandidates: [] },
+      referenceImage: Buffer.from("design"),
+      actualImage: Buffer.from("actual")
+    }), SyntaxError);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("rejects malformed region entries before deterministic verification", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    output_text: JSON.stringify({
+      pageSummary: "分析完成",
+      alignmentPlan: { regions: [null] },
+      bindings: []
+    })
+  }), { status: 200, headers: { "Content-Type": "application/json" } });
+  try {
+    await assert.rejects(generateElementBindings({
+      apiUrl: "https://api.example.test/v1",
+      model: "test-model",
+      request: { locale: "zh-CN", designCandidates: [], actualCandidates: [] },
+      referenceImage: Buffer.from("design"),
+      actualImage: Buffer.from("actual")
+    }), SyntaxError);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("bounds large semantic requests without dropping candidate identities", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestBody: Record<string, any> | undefined;
+  globalThis.fetch = async (_url, init) => {
+    requestBody = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({
+      output_text: JSON.stringify({ pageSummary: "仅报告关键模块", alignmentPlan: { regions: [] }, bindings: [] })
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  const candidates = Array.from({ length: 101 }, (_, index) => ({
+    figmaNodeId: `node-${index}`, name: `候选 ${index}`, type: "RECTANGLE",
+    box: { x: 0, y: index, width: 10, height: 10 }
+  }));
+  try {
+    await generateElementBindings({
+      apiUrl: "https://api.example.test/v1",
+      model: "test-model",
+      request: { locale: "zh-CN", designCandidates: candidates, actualCandidates: [] },
+      referenceImage: Buffer.from("design"),
+      actualImage: Buffer.from("actual")
+    });
+    const schema = requestBody?.text.format.schema;
+    assert.equal(schema.properties.alignmentPlan.properties.regions.maxItems, 16);
+    assert.equal(schema.properties.bindings.maxItems, 24);
+    const prompt = requestBody?.input[0].content[0].text as string;
+    assert.match(prompt, /node-100/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("keeps structural identities while trimming repeated region context", async () => {
+  const originalFetch = globalThis.fetch;
+  let prompt = "";
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    prompt = body.input[0].content[0].text;
+    return new Response(JSON.stringify({
+      output_text: JSON.stringify({ pageSummary: "结构待核验", alignmentPlan: { regions: [] }, bindings: [] })
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  try {
+    await generateElementBindings({
+      apiUrl: "https://api.example.test/v1", model: "test-model",
+      request: {
+        locale: "zh-CN",
+        designRegions: Array.from({ length: 50 }, (_, index) => ({
+          figmaNodeId: `region-${index}`, parentFigmaNodeId: "root",
+          designPath: ["root", "page", `region-${index}`],
+          box: { x: 0, y: index * 10, width: 10, height: 10 },
+          contextTexts: Array.from({ length: 12 }, (_, textIndex) => `${index}-${textIndex}-${"x".repeat(120)}`)
+        })),
+        designCandidates: [{ figmaNodeId: "design-target", name: "目标", type: "TEXT",
+          box: { x: 0, y: 0, width: 10, height: 10 } }],
+        actualCandidates: [{ fingerprintKey: "actual-target", selector: ".target", tag: "span",
+          box: { x: 0, y: 0, width: 10, height: 10 } }]
+      },
+      referenceImage: Buffer.from("design"), actualImage: Buffer.from("actual")
+    });
+    assert.match(prompt, /region-49/);
+    assert.match(prompt, /design-target/);
+    assert.match(prompt, /actual-target/);
+    assert.doesNotMatch(prompt, /x{100}/);
+    assert.ok(prompt.length < 30_000);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("normalizes a compatible provider's selector-based bindings without trusting incomplete module claims", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ output_text: `\`\`\`json\n${JSON.stringify({
+    pageSummary: "候选对应",
+    alignmentPlan: [{ designParentFigmaNodeId: "module", designPath: ["页面", "模块"],
+      status: "missing-in-actual", actualParentSelector: null, displacement: null }],
+    elementBindings: [{ designCandidateFigmaNodeId: "design-card", actualCandidateSelector: ".card",
+      confidence: 0.91 }]
+  })}\n\`\`\`` }), { status: 200, headers: { "Content-Type": "application/json" } });
+  try {
+    const result = await generateElementBindings({
+      apiUrl: "https://api.example.test/v1", model: "test-model",
+      request: { locale: "zh-CN", designCandidates: [{ figmaNodeId: "design-card", name: "卡片",
+        type: "RECTANGLE", box: { x: 0, y: 0, width: 10, height: 10 } }],
+        actualCandidates: [{ fingerprintKey: "actual-card-key", selector: ".card", tag: "div",
+          box: { x: 0, y: 0, width: 10, height: 10 } }] },
+      referenceImage: Buffer.from("design"), actualImage: Buffer.from("actual")
+    });
+    assert.deepEqual(result.alignmentPlan.regions, []);
+    assert.equal(result.bindings.length, 1);
+    assert.equal(result.bindings[0].figmaNodeId, "design-card");
+    assert.equal(result.bindings[0].fingerprintKey, "actual-card-key");
+    assert.match(result.bindings[0].reason, /未附理由/);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("passes an unknown selector proposal to deterministic rejection and correction", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ output_text: JSON.stringify({
+    pageSummary: "候选对应", alignmentPlan: [],
+    elementBindings: [{ designCandidateFigmaNodeId: "design-card", actualCandidateSelector: ".unknown",
+      confidence: 0.91 }]
+  }) }), { status: 200, headers: { "Content-Type": "application/json" } });
+  try {
+    const result = await generateElementBindings({
+      apiUrl: "https://api.example.test/v1", model: "test-model",
+      request: { locale: "zh-CN", designCandidates: [{ figmaNodeId: "design-card", name: "卡片",
+        type: "RECTANGLE", box: { x: 0, y: 0, width: 10, height: 10 } }], actualCandidates: [] },
+      referenceImage: Buffer.from("design"), actualImage: Buffer.from("actual")
+    });
+    assert.equal(result.bindings[0].fingerprintKey, ".unknown");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("accepts a complete fenced binding result preceded by provider commentary", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ output_text:
+    `Here is the result:\n\`\`\`json\n${JSON.stringify({ pageSummary: "对应关系", alignmentPlan: { regions: [] }, bindings: [] })}\n\`\`\``
+  }), { status: 200, headers: { "Content-Type": "application/json" } });
+  try {
+    const result = await generateElementBindings({
+      apiUrl: "https://api.example.test/v1", model: "test-model",
+      request: { locale: "zh-CN", designCandidates: [], actualCandidates: [] },
+      referenceImage: Buffer.from("design"), actualImage: Buffer.from("actual")
+    });
+    assert.equal(result.pageSummary, "对应关系");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("accepts a provider's module array with standard binding entries", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ output_text: JSON.stringify({
+    pageSummary: "模块候选",
+    alignmentPlan: [{ designParentFigmaNodeId: "module", designPath: ["页面", "模块"],
+      status: "uncertain", actualParentSelector: null, displacement: null }],
+    bindings: [{ figmaNodeId: "design-card", fingerprintKey: "actual-card-key", confidence: 0.91,
+      reason: "名称和尺寸相同" }]
+  }) }), { status: 200, headers: { "Content-Type": "application/json" } });
+  try {
+    const result = await generateElementBindings({
+      apiUrl: "https://api.example.test/v1", model: "test-model",
+      request: { locale: "zh-CN", designCandidates: [], actualCandidates: [] },
+      referenceImage: Buffer.from("design"), actualImage: Buffer.from("actual")
+    });
+    assert.deepEqual(result.alignmentPlan.regions, []);
+    assert.equal(result.bindings[0].fingerprintKey, "actual-card-key");
+  } finally { globalThis.fetch = originalFetch; }
 });

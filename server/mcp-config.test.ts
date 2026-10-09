@@ -33,3 +33,10 @@ test("honors an explicit local AI disable switch", () => {
     model: "local-model"
   });
 });
+
+
+test("Jev can enable shared defaults without placing its credential into caller options", () => {
+  assert.deepEqual(aiDefaultsFromEnvironment({ DIFFLAB_AI_ADVICE_PROVIDER: "jev", TYPESAFE_API_KEY: "secret" }), { requested: true });
+  assert.deepEqual(aiDefaultsFromEnvironment({ DIFFLAB_AI_ADVICE_PROVIDER: "jev", TYPESAFE_API_KEY: "secret", DIFFLAB_AI_ENABLED: "false" }), { requested: false });
+  assert.throws(() => aiDefaultsFromEnvironment({ DIFFLAB_AI_ADVICE_PROVIDER: "unknown" }), /must be openai or jev/);
+});

@@ -814,3 +814,49 @@ test("uses screenshot OCR anchors for capped visual parameter checks", async () 
   assert.equal(position?.severity, "pending");
   assert.ok((position?.evidenceConfidence.score ?? 1) <= 0.82);
 });
+
+
+test("Jev advice selection uses server credentials and publishes phase timing without changing verdict", async () => {
+  const image = await solidPng();
+  const actualImage = await sharp({ create: { width: 16, height: 16, channels: 4,
+    background: { r: 0, g: 0, b: 0, alpha: 1 } } }).png().toBuffer();
+  let calls = 0;
+  let expectedKey = "jev-secret";
+  let expectedModel = "jev-1.13.0";
+  let clock = 0;
+  const service = new ReviewService({
+    environment: { DIFFLAB_AI_ADVICE_PROVIDER: "jev", TYPESAFE_API_KEY: "jev-secret", TYPESAFE_MODEL: "jev-1.13.0" },
+    now: () => ++clock * 10,
+    dependencies: {
+      buildDesignTruthFromFigma: async () => figmaTruth(image),
+      captureLiveActualEvidence: async () => liveEvidence({ image: actualImage }),
+      generateAiAdvice: async () => { throw new Error("wrong provider"); },
+      generateJevAdvice: async input => {
+        calls++;
+        assert.equal(input.apiKey, expectedKey);
+        assert.equal(input.apiUrl, undefined);
+        assert.equal(input.model, expectedModel);
+        const issue = input.issues[0];
+        return { model: "jev-1.13.0", summary: issue.title,
+          summaryEvidenceRefs: [`review-issue:${issue.id}`], priorities: [{ title: issue.title,
+            reason: issue.summary, action: issue.primaryAction, evidenceRefs: [`review-issue:${issue.id}`] }] };
+      }
+    }
+  });
+  const input = { locale: "zh-CN" as const, design: figmaDesignInput, h5Url: "https://example.test/market" };
+  const baseline = await service.reviewPagePair({ ...input, ai: { requested: false } });
+  const report = await service.reviewPagePair({ ...input, ai: { requested: true, model: "unrelated-openai-model" } });
+  assert.equal(calls, 1);
+  assert.equal(report.aiAdvice?.model, "jev-1.13.0");
+  assert.equal(report.status, baseline.status);
+  assert.deepEqual(report.issues, baseline.issues);
+  assert.deepEqual(report.phaseTimings, { preparationMs: 10, comparisonMs: 10, adviceMs: 10 });
+  assert.ok(!JSON.stringify(report).includes("jev-secret"));
+  expectedKey = "local-jev-key";
+  expectedModel = "jev-custom";
+  const overridden = await service.reviewPagePair({ ...input, ai: { requested: true,
+    adviceProvider: "jev", jevApiKey: expectedKey, jevModel: expectedModel } });
+  assert.equal(calls, 2);
+  assert.equal(overridden.status, baseline.status);
+  assert.ok(!JSON.stringify(overridden).includes(expectedKey));
+});

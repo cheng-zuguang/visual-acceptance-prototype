@@ -26,6 +26,7 @@ import {
   UploadCloud,
   XCircle
 } from "lucide-react";
+import { AdviceSettings, adviceRequestFields, emptyAdviceSettings, type AdviceSettingsValue } from "./advice-settings";
 import { useI18n } from "./i18n";
 import { canContinueWithActualEvidence, type ActualEvidenceMode } from "./actual-mode";
 import { AgentMatchingDiagnosticsCard } from "./agent-matching-diagnostics-card";
@@ -170,6 +171,8 @@ function SourceStep(props: {
   setModelsSourceUrl: (value: string) => void;
   useAi: boolean;
   setUseAi: (value: boolean) => void;
+  adviceSettings: AdviceSettingsValue;
+  setAdviceSettings: (value: AdviceSettingsValue) => void;
   onClearCredentials: () => void;
   onContinue: () => void;
   onDemo: () => void;
@@ -422,6 +425,7 @@ function SourceStep(props: {
               </div>
               {modelMessage && <small className={`model-${modelMessage.kind}`} aria-live="polite">{modelMessage.text}</small>}
             </div>
+            <AdviceSettings value={props.adviceSettings} onChange={props.setAdviceSettings} enabled={props.useAi} />
             <div className="credential-cache-note">
               <ShieldCheck size={17} />
               <span><b>{t("credentials.cache.title")}</b><small>{t("credentials.cache.help")}</small></span>
@@ -730,6 +734,7 @@ export function App() {
   const [aiModels, setAiModels] = useState(initialCredentials.aiModels);
   const [modelsSourceUrl, setModelsSourceUrl] = useState(initialCredentials.modelsSourceUrl);
   const [useAi, setUseAi] = useState(initialCredentials.useAi);
+  const [adviceSettings, setAdviceSettings] = useState(emptyAdviceSettings);
   const [defaultYaml, setDefaultYaml] = useState("");
   const [rulesYaml, setRulesYaml] = useState("");
   const [report, setReport] = useState<CompareReport>();
@@ -790,12 +795,14 @@ export function App() {
   const run = async (demo = false) => {
     setBusy(true); setLoadingStage(0); setError(""); setStep(3); setReport(undefined);
     try {
+      const adviceFields = adviceRequestFields(adviceSettings, useAi);
       let response: Response;
       if (demo) {
-        response = await fetch("/api/demo-compare", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rulesYaml, useAi, openaiKey, openaiApiUrl, openaiModel, locale }) });
+        response = await fetch("/api/demo-compare", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rulesYaml, useAi, openaiKey, openaiApiUrl, openaiModel, locale, ...adviceFields }) });
       } else {
         const body = new FormData();
         body.set("actualMode", actualMode); body.set("h5Url", h5Url); body.set("rulesYaml", rulesYaml); body.set("figmaToken", figmaToken); body.set("openaiKey", openaiKey); body.set("openaiApiUrl", openaiApiUrl); body.set("openaiModel", openaiModel); body.set("useAi", String(useAi)); body.set("locale", locale); body.set("screenshotDpr", screenshotDpr); body.set("longScreenshotViewportHeight", longScreenshotViewportHeight);
+        for (const [key, value] of Object.entries(adviceFields)) body.set(key, value);
         body.set("figmaUrl", figmaUrl);
         screenshots.forEach((file) => body.append("screenshots", file));
         response = await fetch("/api/compare", { method: "POST", body });
@@ -821,6 +828,7 @@ export function App() {
     setOpenaiKey("");
     setOpenaiApiUrl("");
     setOpenaiModel("");
+    setAdviceSettings(emptyAdviceSettings);
     setAiModels([]);
     setModelsSourceUrl("");
     setUseAi(true);
@@ -832,7 +840,7 @@ export function App() {
       <header className="app-header"><a className="brand" href="/prototype/visual-qa"><span className="brand-mark"><i /><i /><i /><i /></span><span>DiffLab<small>{t("app.subtitle")}</small></span></a><StepRail step={step} /><div className="header-tools"><span className="prototype-pill">{t("app.prototype")}</span><div className="language-switch" role="group" aria-label={t("language.label")}><Globe2 size={14} /><button type="button" className={locale === "zh-CN" ? "active" : ""} aria-pressed={locale === "zh-CN"} onClick={() => setLocale("zh-CN")}>{t("language.zh")}</button><button type="button" className={locale === "en" ? "active" : ""} aria-pressed={locale === "en"} onClick={() => setLocale("en")}>{t("language.en")}</button></div></div></header>
       {error && <div className="error-banner"><XCircle size={17} /><span><b>{t("error.title")}</b>{error}</span><button onClick={() => setError("")}>{t("error.close")}</button></div>}
       <main id="main-content" tabIndex={-1}>
-        {step === 1 && <SourceStep actualMode={actualMode} setActualMode={setActualMode} figmaUrl={figmaUrl} setFigmaUrl={setFigmaUrl} h5Url={h5Url} setH5Url={setH5Url} screenshots={screenshots} setScreenshots={setScreenshots} screenshotDpr={screenshotDpr} setScreenshotDpr={setScreenshotDpr} longScreenshotViewportHeight={longScreenshotViewportHeight} setLongScreenshotViewportHeight={setLongScreenshotViewportHeight} figmaToken={figmaToken} setFigmaToken={setFigmaToken} openaiKey={openaiKey} setOpenaiKey={setOpenaiKey} openaiApiUrl={openaiApiUrl} setOpenaiApiUrl={setOpenaiApiUrl} openaiModel={openaiModel} setOpenaiModel={setOpenaiModel} aiModels={aiModels} setAiModels={setAiModels} modelsSourceUrl={modelsSourceUrl} setModelsSourceUrl={setModelsSourceUrl} useAi={useAi} setUseAi={setUseAi} onClearCredentials={clearCredentials} onContinue={() => setStep(2)} onDemo={() => run(true)} busy={busy} />}
+        {step === 1 && <SourceStep actualMode={actualMode} setActualMode={setActualMode} figmaUrl={figmaUrl} setFigmaUrl={setFigmaUrl} h5Url={h5Url} setH5Url={setH5Url} screenshots={screenshots} setScreenshots={setScreenshots} screenshotDpr={screenshotDpr} setScreenshotDpr={setScreenshotDpr} longScreenshotViewportHeight={longScreenshotViewportHeight} setLongScreenshotViewportHeight={setLongScreenshotViewportHeight} figmaToken={figmaToken} setFigmaToken={setFigmaToken} openaiKey={openaiKey} setOpenaiKey={setOpenaiKey} openaiApiUrl={openaiApiUrl} setOpenaiApiUrl={setOpenaiApiUrl} openaiModel={openaiModel} setOpenaiModel={setOpenaiModel} aiModels={aiModels} setAiModels={setAiModels} modelsSourceUrl={modelsSourceUrl} setModelsSourceUrl={setModelsSourceUrl} useAi={useAi} setUseAi={setUseAi} adviceSettings={adviceSettings} setAdviceSettings={setAdviceSettings} onClearCredentials={clearCredentials} onContinue={() => setStep(2)} onDemo={() => run(true)} busy={busy} />}
         {step === 2 && <RulesStep rulesYaml={rulesYaml} setRulesYaml={(value) => { rulesEdited.current = true; setRulesYaml(value); }} defaultYaml={defaultYaml} onBack={() => setStep(1)} onRun={() => run(false)} busy={busy} />}
         {step === 3 && (busy || !report ? <LoadingReport stage={loadingStage} /> : <ReportStep report={report} onReset={reset} />)}
       </main>

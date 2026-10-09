@@ -16,6 +16,10 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
       - OPENAI_MODEL=${OPENAI_MODEL:-}
+      - DIFFLAB_AI_ENABLED=${DIFFLAB_AI_ENABLED:-}
+      - DIFFLAB_AI_ADVICE_PROVIDER=${DIFFLAB_AI_ADVICE_PROVIDER:-openai}
+      - TYPESAFE_API_KEY=${TYPESAFE_API_KEY:-}
+      - TYPESAFE_MODEL=${TYPESAFE_MODEL:-jev-1.13.0}
       - CHROMIUM_FLAGS=${CHROMIUM_FLAGS:-}
       - DIFFLAB_ALLOWED_CLIENT_IPS=${DIFFLAB_ALLOWED_CLIENT_IPS:-}
     # Headless Chromium needs sufficient shared memory for heavy page renders

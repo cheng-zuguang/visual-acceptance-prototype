@@ -54,7 +54,7 @@ export async function withServer(app: ReturnType<typeof createPublicApiApp>, run
   try { await run(`http://127.0.0.1:${(server.address() as AddressInfo).port}`); }
   finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 }
-export async function completed(base: string, path = "/v1/reviews", body: unknown = { name: "Review", pagePairs: [pagePair] }) {
+export async function completed(base: string, path = "/v1/reviews", body: unknown = { name: "Review", pagePairs: [pagePair] }, allowFailed = false) {
   const response = await fetch(base + path, { method: "POST", headers, body: JSON.stringify(body) });
   assert.equal(response.status, 202, await response.clone().text());
   const accepted = await response.json();
@@ -62,7 +62,7 @@ export async function completed(base: string, path = "/v1/reviews", body: unknow
     const result = await fetch(base + accepted.resultUrl, { headers });
     if (result.status === 200) return { accepted, result: await result.json() };
     const status = await (await fetch(base + accepted.statusUrl, { headers })).json();
-    if (status.status === "failed") assert.fail(JSON.stringify(status));
+    if (status.status === "failed" && !allowFailed) assert.fail(JSON.stringify(status));
     await new Promise(resolve => setTimeout(resolve, 10));
   }
   assert.fail("Review did not complete");
@@ -298,7 +298,7 @@ test("capture failure preserves the selected issue identity and exports a failed
   await withServer(fixture.app, async base => {
     const { result, accepted } = await completed(base, "/v1/issue-rechecks", {
       name: "Unavailable target", locale: "en", pagePair, issue: { issueId: 50, rule: "size", figmaNodeId: "1:2" }
-    });
+    }, true);
     assert.equal(result.status, "failed");
     assert.equal(result.results[0].issueId, 50);
     assert.equal(result.results[0].verdict, "needs_review");

@@ -18,6 +18,8 @@ import type {
   ScreenshotActualEvidence
 } from "../src/types";
 import { generateAiAdvice, generateDynamicHypothesis, generateElementBindings, PartialAiAdviceError } from "./ai";
+import { generateJevAdvice } from "./jev";
+import { adviceProviderFromEnvironment } from "./ai-review-config";
 import {
   captureLiveActualEvidence,
   captureLiveActualEvidenceAtScrollOffsets,
@@ -60,6 +62,10 @@ export interface AiReviewOptions {
   apiKey?: string;
   apiUrl?: string;
   model?: string;
+  /** Ephemeral local-prototype overrides; never persisted or exposed through MCP. */
+  adviceProvider?: "openai" | "jev";
+  jevApiKey?: string;
+  jevModel?: string;
 }
 
 export interface ReviewPagePairInput {
@@ -166,6 +172,7 @@ interface ReviewDependencies {
   buildDesignTruthFromFigma: typeof buildDesignTruthFromFigma;
   parseAcceptanceYaml: typeof parseAcceptanceYaml;
   generateAiAdvice: typeof generateAiAdvice;
+  generateJevAdvice: typeof generateJevAdvice;
   generateDynamicHypothesis: typeof generateDynamicHypothesis;
   generateElementBindings: typeof generateElementBindings;
   buildScreenshotActualEvidence: (
@@ -179,11 +186,7 @@ interface ReviewDependencies {
 
 export interface ReviewServiceOptions {
   dependencies?: Partial<ReviewDependencies>;
-  environment?: {
-    FIGMA_TOKEN?: string;
-    OPENAI_API_KEY?: string;
-    OPENAI_BASE_URL?: string;
-  };
+  environment?: Record<string, string | undefined>;
   now?: () => number;
 }
 
@@ -221,6 +224,7 @@ const defaultDependencies: ReviewDependencies = {
   buildDesignTruthFromFigma,
   parseAcceptanceYaml,
   generateAiAdvice,
+  generateJevAdvice,
   generateDynamicHypothesis,
   generateElementBindings,
   buildScreenshotActualEvidence,
@@ -586,6 +590,7 @@ export class ReviewService {
         )
       : [];
     const liveByScrollY = new Map(liveTiles.map((item) => [item.scrollY, item.evidence]));
+    const comparisonStartedAt = this.now();
     const comparisons = [];
     const tileAlignments: NonNullable<CompareReport["longScreenshot"]>["tileAlignments"] = [];
     const liveTileDiagnostics: string[] = [];
@@ -651,6 +656,7 @@ export class ReviewService {
       ...liveTiles.flatMap((item) => item.evidence.diagnostics),
       ...liveTileDiagnostics
     ];
+    const adviceStartedAt = this.now();
     const aiAdvice = await this.maybeGenerateAiAdvice({
       options: input.ai,
       comparison: aggregated.comparison,
@@ -672,6 +678,7 @@ export class ReviewService {
       viewport: { width: evidence.fullPage.width, height: evidence.fullPage.height },
       rules: config,
       diagnostics,
+      phaseTimings: { preparationMs: comparisonStartedAt - startedAt, comparisonMs: adviceStartedAt - comparisonStartedAt, adviceMs: this.now() - adviceStartedAt },
       durationMs: this.now() - startedAt,
       aiAdvice: aiAdvice.advice,
       aiAdviceRejection: aiAdvice.rejection
@@ -713,6 +720,7 @@ export class ReviewService {
     startedAt: number;
     ai?: AiReviewOptions;
   }): Promise<CompareReport> {
+    const comparisonStartedAt = this.now();
     const comparison = await this.dependencies.compareDesignToPage(
       input.design,
       input.evidence,
@@ -724,6 +732,7 @@ export class ReviewService {
       }
     );
     const diagnostics = [...input.design.diagnostics, ...input.evidence.diagnostics];
+    const adviceStartedAt = this.now();
     const aiAdvice = await this.maybeGenerateAiAdvice({
       options: input.ai,
       comparison,
@@ -748,6 +757,7 @@ export class ReviewService {
       viewport: input.design.render.viewport,
       rules: input.config,
       diagnostics,
+      phaseTimings: { preparationMs: comparisonStartedAt - input.startedAt, comparisonMs: adviceStartedAt - comparisonStartedAt, adviceMs: this.now() - adviceStartedAt },
       durationMs: this.now() - input.startedAt,
       aiAdvice: aiAdvice.advice,
       aiAdviceRejection: aiAdvice.rejection
@@ -827,9 +837,11 @@ export class ReviewService {
       return {};
     }
 
-    const apiKey = input.options.apiKey?.trim() || this.environment?.OPENAI_API_KEY;
-    const apiUrl = input.options.apiUrl?.trim() || this.environment?.OPENAI_BASE_URL;
-    if (!apiKey && !apiUrl) {
+    const provider = input.options.adviceProvider ?? adviceProviderFromEnvironment(this.environment ?? {});
+    const apiKey = provider === "jev" ? input.options.jevApiKey?.trim() || this.environment?.TYPESAFE_API_KEY?.trim()
+      : input.options.apiKey?.trim() || this.environment?.OPENAI_API_KEY;
+    const apiUrl = provider === "jev" ? undefined : input.options.apiUrl?.trim() || this.environment?.OPENAI_BASE_URL;
+    if (provider === "openai" && !apiKey && !apiUrl) {
       input.diagnostics.push(
         localText(
           input.locale,
@@ -841,10 +853,11 @@ export class ReviewService {
     }
 
     try {
-      return { advice: await this.dependencies.generateAiAdvice({
+      const generate = provider === "jev" ? this.dependencies.generateJevAdvice : this.dependencies.generateAiAdvice;
+      return { advice: await generate({
         apiKey,
         apiUrl,
-        model: input.options.model,
+        model: provider === "jev" ? input.options.jevModel?.trim() || this.environment?.TYPESAFE_MODEL : input.options.model,
         issues: input.comparison.issues,
         pageAlignment,
         locale: input.locale

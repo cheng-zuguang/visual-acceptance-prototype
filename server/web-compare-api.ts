@@ -21,6 +21,24 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024, files: 5 }
 });
 
+// Local prototype only. Public HTTP and MCP retain server-owned AI configuration.
+function adviceOverrides(body: Record<string, unknown>): Partial<AiReviewOptions> {
+  const provider = body.adviceProvider;
+  if (provider !== undefined && provider !== "" && provider !== "default" && provider !== "openai" && provider !== "jev") {
+    throw new Error("Invalid advice provider.");
+  }
+  for (const key of ["jevApiKey", "jevModel"] as const) {
+    if (body[key] !== undefined && (typeof body[key] !== "string" || (body[key] as string).length > 4096)) {
+      throw new Error("Invalid Jev configuration.");
+    }
+  }
+  return {
+    ...(provider === "openai" || provider === "jev" ? { adviceProvider: provider } : {}),
+    ...(provider === "jev" ? { jevApiKey: (body.jevApiKey as string | undefined)?.trim(),
+      jevModel: (body.jevModel as string | undefined)?.trim() } : {})
+  };
+}
+
 async function screenshotSources(
   files: Express.Multer.File[],
   body: Record<string, string>,
@@ -130,6 +148,7 @@ export function createWebCompareRouter(options: WebCompareApiOptions): express.R
         locale,
         rulesYaml: request.body?.rulesYaml,
         ai: {
+          ...adviceOverrides(request.body ?? {}),
           requested: request.body?.useAi === true,
           apiKey: request.body?.openaiKey,
           apiUrl: request.body?.openaiApiUrl,
@@ -175,6 +194,7 @@ export function createWebCompareRouter(options: WebCompareApiOptions): express.R
         locale: requestLocale(body.locale),
         rulesYaml: body.rulesYaml,
         ai: {
+          ...adviceOverrides(body),
           requested: body.useAi === "true",
           apiKey: body.openaiKey,
           apiUrl: body.openaiApiUrl,

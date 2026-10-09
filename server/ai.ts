@@ -13,19 +13,7 @@ import { localText, type Locale } from "./i18n";
 
 export const DEFAULT_AI_MODEL = "gpt-5.6-terra";
 
-interface AiAdviceSelection {
-  summaryEvidenceRefs: AiAdviceEvidenceRef[];
-  priorities: Array<{ evidenceRefs: AiAdviceEvidenceRef[] }>;
-}
-
-interface AiAdviceEvidence {
-  ref: AiAdviceEvidenceRef;
-  kind: "review-issue" | "page-alignment";
-  title: string;
-  reason: string;
-  action: string;
-  digest: Record<string, unknown>;
-}
+import { buildAiAdviceEvidence, materializeAiAdvice, enforceBlockingStructuralCoverage, type AiAdviceSelection, type AiAdviceEvidence } from "./ai-advice";
 
 function adviceSchema(allowedRefs: AiAdviceEvidenceRef[]): Record<string, unknown> {
   const evidenceRef = { type: "string", enum: allowedRefs };
@@ -185,20 +173,30 @@ const ELEMENT_BINDING_SCHEMA = {
 };
 
 function extractOutputText(payload: Record<string, unknown>): string | undefined {
-  if (typeof payload.output_text === "string") return payload.output_text;
+  if (typeof payload.output_text === "string" && payload.output_text.trim()) return payload.output_text;
   const output = Array.isArray(payload.output) ? payload.output : [];
+  let messageText: string | undefined;
+  let fallbackText: string | undefined;
   for (const item of output) {
     if (!item || typeof item !== "object") continue;
+    const itemType = (item as Record<string, unknown>).type;
     const content = Array.isArray((item as Record<string, unknown>).content)
       ? ((item as Record<string, unknown>).content as unknown[])
       : [];
+    const currentMessageTexts: string[] = [];
     for (const block of content) {
       if (!block || typeof block !== "object") continue;
-      const text = (block as Record<string, unknown>).text;
-      if (typeof text === "string") return text;
+      const record = block as Record<string, unknown>;
+      if (typeof record.text !== "string" || !record.text.trim()) continue;
+      if (itemType === "message" && record.type === "output_text") {
+        currentMessageTexts.push(record.text);
+      } else if (fallbackText === undefined) {
+        fallbackText = record.text;
+      }
     }
+    if (currentMessageTexts.length) messageText = currentMessageTexts.join("");
   }
-  return undefined;
+  return messageText ?? fallbackText;
 }
 
 function parseJsonOutput(outputText: string): unknown {
@@ -206,10 +204,147 @@ function parseJsonOutput(outputText: string): unknown {
   try {
     return JSON.parse(trimmed);
   } catch (initialError) {
-    const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)?.[1];
+    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)?.[1];
     if (!fenced) throw initialError;
     return JSON.parse(fenced);
   }
+}
+
+function parseElementBindingResult(
+  outputText: string,
+  request: AgentElementBindingRequest
+): AgentElementBindingResult {
+  let value = parseJsonOutput(outputText);
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const providerResult = value as Record<string, unknown>;
+    const rawRegions = Array.isArray(providerResult.alignmentPlan)
+      ? providerResult.alignmentPlan
+      : providerResult.alignmentPlan && typeof providerResult.alignmentPlan === "object"
+        ? (providerResult.alignmentPlan as Record<string, unknown>).regions
+        : undefined;
+    const rawBindings = Array.isArray(providerResult.bindings)
+      ? providerResult.bindings
+      : providerResult.elementBindings;
+    if (Array.isArray(rawRegions) && Array.isArray(rawBindings) &&
+      (Array.isArray(providerResult.alignmentPlan) || Array.isArray(providerResult.elementBindings))) {
+      const actualBySelector = new Map<string, AgentElementBindingRequest["actualCandidates"]>();
+      for (const candidate of request.actualCandidates) {
+        actualBySelector.set(candidate.selector, [...(actualBySelector.get(candidate.selector) ?? []), candidate]);
+      }
+      value = {
+        pageSummary: providerResult.pageSummary,
+        alignmentPlan: {
+          regions: rawRegions.filter(region => {
+            if (!region || typeof region !== "object") return false;
+            const decision = region as Record<string, unknown>;
+            return Number.isFinite(decision.confidence) &&
+              typeof decision.reason === "string" && Boolean(decision.reason.trim());
+          })
+        },
+        bindings: rawBindings.slice(0, 24).flatMap(binding => {
+          if (!binding || typeof binding !== "object") return [];
+          const proposal = binding as Record<string, unknown>;
+          if (typeof proposal.figmaNodeId === "string" &&
+            typeof proposal.fingerprintKey === "string") return [proposal];
+          const selector = proposal.actualCandidateSelector;
+          const figmaNodeId = proposal.designCandidateFigmaNodeId;
+          const candidates = typeof selector === "string" ? actualBySelector.get(selector) : undefined;
+          if (typeof figmaNodeId !== "string" || !figmaNodeId.trim() ||
+            typeof selector !== "string" || !selector.trim() ||
+            !Number.isFinite(proposal.confidence)) return [];
+          return [{
+            figmaNodeId,
+            fingerprintKey: candidates?.length === 1 ? candidates[0].fingerprintKey : selector,
+            confidence: proposal.confidence,
+            reason: typeof proposal.reason === "string" && proposal.reason.trim()
+              ? proposal.reason
+              : localText(request.locale,
+                "兼容接口未附理由；模型仅提出候选对应，需通过确定性复核。",
+                "The compatible API supplied no reason; this is only a proposed match subject to deterministic verification.")
+          }];
+        })
+      };
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new SyntaxError("AI element binding result has an invalid structure.");
+  }
+  const result = value as Record<string, unknown>;
+  const alignment = result.alignmentPlan;
+  if (
+    typeof result.pageSummary !== "string" ||
+    !alignment || typeof alignment !== "object" || Array.isArray(alignment) ||
+    !Array.isArray((alignment as Record<string, unknown>).regions) ||
+    !Array.isArray(result.bindings)
+  ) {
+    throw new SyntaxError("AI element binding result has an invalid structure.");
+  }
+  for (const region of (alignment as Record<string, unknown>).regions as unknown[]) {
+    if (!region || typeof region !== "object" || Array.isArray(region)) {
+      throw new SyntaxError("AI element binding result has an invalid region.");
+    }
+    const candidate = region as Record<string, unknown>;
+    const displacement = candidate.displacement;
+    if (
+      typeof candidate.designParentFigmaNodeId !== "string" ||
+      !Array.isArray(candidate.designPath) ||
+      !candidate.designPath.every((part: unknown) => typeof part === "string") ||
+      !["matched", "missing-in-actual", "uncertain"].includes(String(candidate.status)) ||
+      (candidate.actualParentSelector != null && typeof candidate.actualParentSelector !== "string") ||
+      (displacement != null && (
+        typeof displacement !== "object" || Array.isArray(displacement) ||
+        !Number.isFinite((displacement as Record<string, unknown>).x) ||
+        !Number.isFinite((displacement as Record<string, unknown>).y)
+      )) ||
+      !Number.isFinite(candidate.confidence) ||
+      typeof candidate.reason !== "string"
+    ) {
+      throw new SyntaxError("AI element binding result has an invalid region.");
+    }
+  }
+  for (const binding of result.bindings) {
+    if (!binding || typeof binding !== "object" || Array.isArray(binding) ||
+      typeof binding.figmaNodeId !== "string" ||
+      typeof binding.fingerprintKey !== "string" ||
+      !Number.isFinite(binding.confidence) ||
+      typeof binding.reason !== "string") {
+      throw new SyntaxError("AI element binding result has an invalid binding.");
+    }
+  }
+  return value as AgentElementBindingResult;
+}
+
+function compactElementBindingRequest(request: AgentElementBindingRequest): AgentElementBindingRequest {
+  const brief = (value: string, limit: number) => value.trim().slice(0, limit);
+  const context = (values: string[]) => [...new Set(values.map(value => brief(value, 60)).filter(Boolean))].slice(0, 4);
+  return {
+    ...request,
+    designRegions: request.designRegions?.map(region => ({
+      ...region,
+      designPath: region.designPath.slice(-4).map(value => brief(value, 60)),
+      contextTexts: context(region.contextTexts)
+    })),
+    designCandidates: request.designCandidates.map(candidate => ({
+      ...candidate,
+      name: brief(candidate.name, 80),
+      ...(candidate.text ? { text: brief(candidate.text, 120) } : {}),
+      ...(candidate.ancestorPath ? { ancestorPath: candidate.ancestorPath.slice(-4).map(value => brief(value, 60)) } : {})
+    })),
+    actualCandidates: request.actualCandidates.map(candidate => ({
+      ...candidate,
+      ...(candidate.text ? { text: brief(candidate.text, 120) } : {}),
+      ...(candidate.contextTexts ? { contextTexts: context(candidate.contextTexts) } : {})
+    })),
+    ...(request.regionHints ? { regionHints: request.regionHints.map(hint => ({
+      ...hint, designPath: hint.designPath.slice(-4).map(value => brief(value, 60))
+    })) } : {}),
+    ...(request.feedback ? { feedback: {
+      instruction: brief(request.feedback.instruction, 160),
+      rejectedBindings: request.feedback.rejectedBindings.map(binding => ({
+        ...binding, reason: brief(binding.reason, 120)
+      }))
+    } } : {})
+  };
 }
 
 function uniqueEvidenceRefs(
@@ -264,133 +399,6 @@ function parseAiAdviceSelection(
       }
       return { evidenceRefs: uniqueEvidenceRefs(evidenceRefs, allowedRefs) };
     })
-  };
-}
-
-function matchedAlignmentEvidence(
-  region: PageAlignmentRegionDecision,
-  locale: Locale
-): AiAdviceEvidence | undefined {
-  if (region.status !== "matched" || !region.actualParentSelector || !region.displacement) return undefined;
-  const path = region.designPath.join(" / ") || region.designParentFigmaNodeId;
-  const displacement = region.displacement
-    ? `x=${region.displacement.x}px, y=${region.displacement.y}px`
-    : localText(locale, "无已验证整体位移", "no verified whole-region displacement");
-  return {
-    ref: `page-alignment:${region.designParentFigmaNodeId}`,
-    kind: "page-alignment",
-    title: localText(locale, `${path} 模块对齐`, `${path} module alignment`),
-    reason: region.reason,
-    action: localText(
-      locale,
-      `复核${path}的整体定位，已验证位移为 ${displacement}；详见关联证据。`,
-      `Review the positioning of ${path}; verified displacement is ${displacement}. See linked evidence.`
-    ),
-    digest: {
-      designPath: region.designPath,
-      designParentFigmaNodeId: region.designParentFigmaNodeId,
-      actualParentSelector: region.actualParentSelector,
-      displacement: region.displacement,
-      reason: region.reason,
-      evidenceConfidence: region.evidenceConfidence,
-      anchorStats: region.anchorStats
-    }
-  };
-}
-
-function buildAiAdviceEvidence(
-  issues: ReviewIssue[],
-  pageAlignment: PageAlignmentPlan,
-  locale: Locale
-): AiAdviceEvidence[] {
-  const issueEvidence: AiAdviceEvidence[] = issues.map((issue) => ({
-    ref: `review-issue:${issue.id}`,
-    kind: "review-issue",
-    title: issue.title,
-    reason: issue.summary,
-    action: issue.location.selector?.startsWith("body >")
-      ? issue.primaryAction.replaceAll(issue.location.selector, localText(locale, "该模块内的对应元素", "the corresponding element in this module"))
-      : issue.primaryAction,
-    digest: {
-      id: issue.id,
-      priority: issue.priority,
-      severity: issue.severity,
-      category: issue.category,
-      title: issue.title,
-      summary: issue.summary,
-      expected: issue.expected,
-      actual: issue.actual,
-      primaryAction: issue.primaryAction,
-      location: issue.location,
-      evidenceConfidence: issue.evidenceConfidence
-    }
-  }));
-  const alignmentEvidence = pageAlignment.regions
-    .map((region) => matchedAlignmentEvidence(region, locale))
-    .filter((item): item is AiAdviceEvidence => Boolean(item));
-  return [...issueEvidence, ...alignmentEvidence];
-}
-
-function materializeAiAdvice(
-  selection: AiAdviceSelection,
-  evidence: AiAdviceEvidence[],
-  locale: Locale,
-  model: string
-): AiAdvice {
-  const evidenceByRef = new Map(evidence.map((item) => [item.ref, item]));
-  const resolve = (refs: AiAdviceEvidenceRef[]): AiAdviceEvidence[] => refs.map((ref) => {
-    const item = evidenceByRef.get(ref);
-    if (!item) throw new Error("AI advice evidence disappeared before publication.");
-    return item;
-  });
-  const summaryItems = resolve(selection.summaryEvidenceRefs);
-  return {
-    model,
-    summaryEvidenceRefs: selection.summaryEvidenceRefs,
-    summary: localText(
-      locale,
-      `AI 仅对最终发布问题和已验证模块对齐结论排序。优先处理：${summaryItems.map((item) => item.title).join("；")}。`,
-      `AI ranked only final published issues and verified module-alignment decisions. Prioritize: ${summaryItems.map((item) => item.title).join("; ")}.`
-    ),
-    priorities: selection.priorities.map(({ evidenceRefs }) => {
-      const items = resolve(evidenceRefs);
-      const primary = items.find(item => item.ref.startsWith("review-issue:missing-module:")) ??
-        items.find(item => item.kind === "review-issue") ?? items[0];
-      return {
-        title: primary.title,
-        reason: primary.reason,
-        action: primary.action,
-        evidenceRefs
-      };
-    })
-  };
-}
-
-function enforceBlockingStructuralCoverage(
-  selection: AiAdviceSelection,
-  issues: ReviewIssue[]
-): AiAdviceSelection {
-  const requiredRefs = issues
-    .filter((issue) => (issue.rule === "missing_module" && issue.severity === "error") ||
-      (issue.rule === "design_coverage_unverified" && issue.severity === "pending" && Boolean(issue.coverageModule)))
-    .map((issue): AiAdviceEvidenceRef => `review-issue:${issue.id}`);
-  if (!requiredRefs.length) return selection;
-
-  const summaryEvidenceRefs = [...new Set([
-    ...requiredRefs,
-    ...selection.summaryEvidenceRefs
-  ])];
-  const selectedPriorityRefs = new Set(
-    selection.priorities.flatMap((priority) => priority.evidenceRefs)
-  );
-  const requiredPriorities = requiredRefs
-    .filter((ref) => !selectedPriorityRefs.has(ref) ||
-      (issues.some(issue => `review-issue:${issue.id}` === ref && issue.rule === "design_coverage_unverified" && issue.coverageModule) &&
-        !selection.priorities.some(priority => priority.evidenceRefs.length === 1 && priority.evidenceRefs[0] === ref)))
-    .map((ref) => ({ evidenceRefs: [ref] }));
-  return {
-    summaryEvidenceRefs,
-    priorities: [...requiredPriorities, ...selection.priorities]
   };
 }
 
@@ -463,7 +471,7 @@ async function repairAiAdviceSelection(input: {
   return repairedOutputText;
 }
 
-type AdviceInput = {
+export type AdviceInput = {
   apiKey?: string;
   apiUrl?: string;
   model?: string;
@@ -681,6 +689,25 @@ export async function generateElementBindings(input: {
   const model = input.model?.trim() || process.env.OPENAI_MODEL?.trim() || DEFAULT_AI_MODEL;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (input.apiKey?.trim()) headers.Authorization = `Bearer ${input.apiKey.trim()}`;
+  const requestJson = JSON.stringify(compactElementBindingRequest(input.request));
+  const compact = requestJson.length > 24_000 ||
+    input.request.designCandidates.length + input.request.actualCandidates.length > 100 ||
+    (input.request.designRegions?.length ?? 0) > 40;
+  const regionLimit = compact ? 16 : 40;
+  const bindingLimit = compact ? 24 : 60;
+  const schema = {
+    ...ELEMENT_BINDING_SCHEMA,
+    properties: {
+      ...ELEMENT_BINDING_SCHEMA.properties,
+      alignmentPlan: {
+        ...ELEMENT_BINDING_SCHEMA.properties.alignmentPlan,
+        properties: {
+          regions: { ...ELEMENT_BINDING_SCHEMA.properties.alignmentPlan.properties.regions, maxItems: regionLimit }
+        }
+      },
+      bindings: { ...ELEMENT_BINDING_SCHEMA.properties.bindings, maxItems: bindingLimit }
+    }
+  };
   const response = await fetch(endpoint, {
     method: "POST",
     headers,
@@ -701,7 +728,10 @@ export async function generateElementBindings(input: {
               input.request.locale === "en"
                 ? "designRegions is the structural module inventory, including groups omitted from element candidates. Use its real IDs, parent IDs, boxes and descendant contextTexts to identify whole business cards, not tiny status labels. Propose one missing ancestor card rather than duplicate missing descendants. Bind elements only from designCandidates."
                 : "designRegions 是独立结构模块清单，包含元素候选未收录的编组。使用其真实 ID、父 ID、范围与后代 contextTexts 识别完整业务卡片，不要用细小状态标签代替整卡。缺失模块优先提议完整父卡片，不要重复提议其后代。元素绑定仍仅使用 designCandidates。",
-              JSON.stringify(input.request)
+              input.request.locale === "en"
+                ? `Return at most ${regionLimit} distinct business-module decisions and ${bindingLimit} high-confidence bindings. Prioritize whole missing or displaced modules and the bindings needed to verify them. Omit uncertain details instead of listing every candidate.`
+                : `最多返回 ${regionLimit} 个不同业务模块判断和 ${bindingLimit} 个高置信绑定；优先处理整块缺失或位移及验证它们所需的绑定。不确定的细节请省略，不要逐一罗列全部候选。`,
+              requestJson
             ].join("\n")
           },
           {
@@ -720,7 +750,7 @@ export async function generateElementBindings(input: {
         format: {
           type: "json_schema",
           name: "visual_semantic_element_bindings",
-          schema: ELEMENT_BINDING_SCHEMA,
+          schema,
           strict: true
         }
       }
@@ -743,14 +773,14 @@ export async function generateElementBindings(input: {
       "AI element binding returned no readable result."
     ));
   }
-  return JSON.parse(outputText) as AgentElementBindingResult;
+  return parseElementBindingResult(outputText, input.request);
 }
 
 export function resolveElementBindingTimeoutMs(
   environment: Record<string, string | undefined> = process.env
 ): number {
   const parsed = Number(environment.DIFFLAB_AI_BINDING_TIMEOUT_MS);
-  if (!Number.isFinite(parsed)) return 120_000;
+  if (!Number.isFinite(parsed)) return 60_000;
   return Math.min(180_000, Math.max(10_000, Math.round(parsed)));
 }
 

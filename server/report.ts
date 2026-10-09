@@ -524,6 +524,7 @@ export function createReport(input: {
   rules: AcceptanceConfig;
   diagnostics: string[];
   durationMs: number;
+  phaseTimings?: CompareReport["phaseTimings"];
   aiAdvice?: AiAdvice;
   aiAdviceRejection?: AiAdviceRejection;
   locale: Locale;
@@ -544,6 +545,7 @@ export function createReport(input: {
     id: randomUUID(),
     createdAt: new Date().toISOString(),
     durationMs: input.durationMs,
+    ...(input.phaseTimings ? { phaseTimings: input.phaseTimings } : {}),
     status,
     evidenceMode: input.evidenceMode,
     ...(input.comparison.alignment ? { alignment: input.comparison.alignment } : {}),

@@ -89,6 +89,7 @@ H5 默认在同一浏览器页面会话中采集 3 帧 Live ActualEvidence。每
 | `OPENAI_API_KEY` | 服务端默认 AI API Key | 无 |
 | `OPENAI_BASE_URL` | OpenAI 兼容 API 基础地址、`/responses` 或 `/models` 地址 | `https://api.openai.com/v1` |
 | `OPENAI_MODEL` | 默认 AI 模型 id | `gpt-5.6-terra` |
+| `DIFFLAB_AI_BINDING_TIMEOUT_MS` | 页面语义绑定超时，单位毫秒；大页面自动收紧输出条数 | `60000` |
 | `DIFFLAB_AI_ENABLED` | MCP 与公共 Review 是否默认启用 AI | 根据 Key/API 地址自动判断 |
 | `DIFFLAB_API_BASE_URL` | MCP 工具转发到公共 `/v1` API 的地址 | `http://127.0.0.1:4318` |
 | `DIFFLAB_SERVICE_TOKEN` | 公共 API 与 MCP 共用的 Bearer 服务身份 | 无 |
@@ -164,6 +165,7 @@ docker run -d --name difflab --shm-size=1gb -p 127.0.0.1:14318:4318 difflab:late
 
 ## 文档导航
 
+- [Jev 建议排序实验与耗时对照](./docs/JEV_EXPERIMENT.md)
 - [架构与比对流程](./docs/ARCHITECTURE.md)
 - [AI UI 视觉走查需求与技术蓝图](./docs/AI_UI_REVIEW_BLUEPRINT.md)
 - [YAML 验收规则参考](./docs/ACCEPTANCE_RULES.md)

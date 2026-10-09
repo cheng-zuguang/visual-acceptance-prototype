@@ -1024,6 +1024,7 @@ export interface AiAdviceRejection {
 }
 
 export interface CompareReport {
+  phaseTimings?: { preparationMs: number; comparisonMs: number; adviceMs: number };
   id: string;
   createdAt: string;
   durationMs: number;

@@ -1,5 +1,11 @@
 import type { AiReviewOptions } from "./review";
 
+export function adviceProviderFromEnvironment(environment: Record<string, string | undefined>): "openai" | "jev" {
+  const provider = environment.DIFFLAB_AI_ADVICE_PROVIDER?.trim() || "openai";
+  if (provider !== "openai" && provider !== "jev") throw new Error("DIFFLAB_AI_ADVICE_PROVIDER must be openai or jev.");
+  return provider;
+}
+
 export function aiDefaultsFromEnvironment(
   environment: Record<string, string | undefined>,
 ): AiReviewOptions | undefined {
@@ -13,7 +19,8 @@ export function aiDefaultsFromEnvironment(
   const hasCustomEndpoint = Boolean(
     apiUrl && !/^https:\/\/api\.openai\.com\/v1\/?$/i.test(apiUrl),
   );
-  const autoEnabled = Boolean(apiKey || hasCustomEndpoint);
+  const provider = adviceProviderFromEnvironment(environment);
+  const autoEnabled = Boolean(apiKey || hasCustomEndpoint || (provider === "jev" && environment.TYPESAFE_API_KEY?.trim()));
   if (!autoEnabled && !enabledValue) return undefined;
 
   return {
