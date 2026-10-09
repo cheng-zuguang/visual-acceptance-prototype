@@ -1,3 +1,4 @@
+import { issuePresentation, similarityPresentation } from "../src/issue-presentation";
 import ExcelJS from "exceljs";
 import { reviewVerdict } from "../src/review-verdict";
 import sharp from "sharp";
@@ -29,22 +30,27 @@ function bufferFromDataUrl(value: string): Buffer {
 async function annotatedCrop(
   imageDataUrl: string,
   viewport: { width: number; height: number },
-  issueBox?: Box
+  issueBox?: Box,
+  contextBoxes: Box[] = []
 ): Promise<Buffer> {
   const image = sharp(bufferFromDataUrl(imageDataUrl)).resize(
     Math.max(1, Math.round(viewport.width)),
     Math.max(1, Math.round(viewport.height)),
     { fit: "fill" }
   );
-  const metadata = await image.metadata();
-  const width = metadata.width ?? Math.round(viewport.width);
-  const height = metadata.height ?? Math.round(viewport.height);
+  const width = Math.max(1, Math.round(viewport.width));
+  const height = Math.max(1, Math.round(viewport.height));
   const box = issueBox ?? { x: 0, y: 0, width, height };
-  const padding = issueBox ? 12 : 0;
-  const left = Math.max(0, Math.floor(box.x - padding));
-  const top = Math.max(0, Math.floor(box.y - padding));
-  const right = Math.min(width, Math.ceil(box.x + box.width + padding));
-  const bottom = Math.min(height, Math.ceil(box.y + box.height + padding));
+  const paddingX = issueBox ? Math.max(40, Math.min(120, box.width * 0.5)) : 0;
+  const paddingY = issueBox ? Math.max(32, Math.min(100, box.height * 0.5)) : 0;
+  const nearby = contextBoxes.filter(candidate => candidate.width > 0 && candidate.height > 0 &&
+    candidate.x < box.x + box.width + paddingX && candidate.x + candidate.width > box.x - paddingX &&
+    candidate.y < box.y + box.height + paddingY && candidate.y + candidate.height > box.y - paddingY &&
+    candidate.width <= Math.max(box.width * 3, 240) && candidate.height <= Math.max(box.height * 3, 200));
+  const left = Math.max(0, Math.min(width - 1, Math.floor(Math.min(box.x - paddingX, ...nearby.map(b => b.x - 8)))));
+  const top = Math.max(0, Math.min(height - 1, Math.floor(Math.min(box.y - paddingY, ...nearby.map(b => b.y - 8)))));
+  const right = Math.min(width, Math.ceil(Math.max(box.x + box.width + paddingX, ...nearby.map(b => b.x + b.width + 8))));
+  const bottom = Math.min(height, Math.ceil(Math.max(box.y + box.height + paddingY, ...nearby.map(b => b.y + b.height + 8))));
   const cropWidth = Math.max(1, right - left);
   const cropHeight = Math.max(1, bottom - top);
   const outlineX = Math.max(1, Math.round(box.x - left));
@@ -193,15 +199,16 @@ export async function buildExcelReportArtifact(
 
   let sequence = 0;
   for (const page of input.pages.map(asPageResult)) {
-    for (const issue of page.report?.issues ?? []) {
+    for (const issue of (page.report?.issues ?? []).filter(item => item.rule !== "visual_similarity")) {
+      const presentation = issuePresentation(issue, input.locale, page.report?.matching);
       sequence += 1;
       const row = sheet.addRow([
         sequence,
         page.pageName,
-        issue.location.description,
-        issue.expected ?? "-",
-        issue.actual ?? "-",
-        issue.primaryAction,
+        presentation.location,
+        presentation.expected ?? "-",
+        presentation.actual ?? "-",
+        presentation.suggestion,
         "",
         "",
         issue.priority,
@@ -219,12 +226,14 @@ export async function buildExcelReportArtifact(
         annotatedCrop(
           page.report!.images.reference,
           page.report!.viewport,
-          issue.location.designBox ?? issue.designBox ?? issue.location.box
+          issue.location.designBox ?? issue.designBox ?? issue.location.box,
+          (page.report!.matching.designCoverage?.items ?? []).flatMap(item => item.designBox ? [item.designBox] : [])
         ),
         issue.rule === "missing_module" ? Promise.resolve(undefined) : annotatedCrop(
           page.report!.images.actual,
           page.report!.viewport,
-          issue.location.actualBox ?? issue.actualBox ?? issue.location.box
+          issue.location.actualBox ?? issue.actualBox ?? issue.location.box,
+          (page.report!.matching.designCoverage?.items ?? []).flatMap(item => item.actualBox ? [item.actualBox] : [])
         )
       ]);
       const designImageId = workbook.addImage({
@@ -236,20 +245,29 @@ export async function buildExcelReportArtifact(
         extension: "png"
       }) : undefined;
       if (!actualCrop) row.getCell(8).value = input.locale === "en" ? "Missing: no actual counterpart" : "缺失：无实际对应内容";
-      row.height = 82;
+      const dimensions = async (buffer: Buffer) => {
+        const metadata = await sharp(buffer).metadata();
+        const scale = Math.min(164 / metadata.width!, 160 / metadata.height!);
+        return { width: metadata.width! * scale, height: metadata.height! * scale };
+      };
+      const designSize = await dimensions(designCrop);
+      const actualSize = actualCrop ? await dimensions(actualCrop) : undefined;
+      row.height = Math.max(82, (Math.max(designSize.height, actualSize?.height ?? 0) + 12) * 0.75);
       sheet.addImage(designImageId, {
         tl: { col: 6.05, row: row.number - 0.95 },
-        ext: { width: 148, height: 96 },
+        ext: designSize,
         editAs: "oneCell"
       });
       if (actualImageId !== undefined) sheet.addImage(actualImageId, {
         tl: { col: 7.05, row: row.number - 0.95 },
-        ext: { width: 148, height: 96 },
+        ext: actualSize!,
         editAs: "oneCell"
       });
     }
   }
   styleIssueSheet(sheet, sequence);
+  // Machine identifiers and positioning traces remain available on demand.
+  for (let column = 10; column <= 18; column += 1) sheet.getColumn(column).hidden = true;
   sheet.getColumn(11).numFmt = "0.0%";
 
   const summary = workbook.addWorksheet(input.locale === "en" ? "Page Summary" : "页面汇总", {
@@ -258,24 +276,32 @@ export async function buildExcelReportArtifact(
   styleCompactSheet(
     summary,
     input.locale === "en" ? "Page summary" : "页面汇总",
-    7
+    8
   );
   summary.getRow(3).values = input.locale === "en"
-    ? ["Client page ID", "Page", "Execution status", "Verdict", "Stable similarity", "Issues", "Pending"]
-    : ["调用方页面标识", "页面名称", "执行状态", "验收结论", "稳定区域相似度", "问题数量", "待确认数量"];
+    ? ["Client page ID", "Page", "Execution status", "Verdict", "Stable similarity", "Issues", "Pending", "Visual summary"]
+    : ["调用方页面标识", "页面名称", "执行状态", "验收结论", "稳定区域相似度", "问题数量", "待确认数量", "整体视觉汇总"];
   for (const page of input.pages.map(asPageResult)) {
     summary.addRow([
       page.clientPageId,
       page.pageName,
       page.executionStatus,
       page.verdict,
-      page.report?.summary.stableSimilarity ?? null,
-      page.report?.issues.length ?? 0,
-      page.report?.summary.pending ?? 0
+      page.report?.matching.visualScope?.reviewedPixels === 0 ? null : page.report?.summary.stableSimilarity ?? null,
+      page.report?.issues.filter(issue => issue.rule !== "visual_similarity").length ?? 0,
+      page.report?.summary.pending ?? 0,
+      [...(page.report?.matching.visualScope?.reviewedPixels === 0 ? [similarityPresentation(1, page.report.matching, input.locale)] : []), ...(page.report?.issues.filter(issue => issue.rule === "visual_similarity").map(issue => issue.summary) ?? [])].join("\n")
     ]);
   }
   summary.getColumn(5).numFmt = "0.0%";
 
+  summary.getColumn(8).width = 50;
+  summary.getColumn(8).alignment = { wrapText: true, vertical: "top" };
+  const evidence = workbook.addWorksheet(input.locale === "en" ? "Issue Diagnostics" : "问题诊断", { state: "hidden" });
+  evidence.addRow(["Page", "ReviewIssue", "SourceIssue", "Rule", "Severity", "Expected", "Actual", "Confidence", "Selector", "Figma Node ID"]);
+  for (const page of input.pages) for (const issue of page.report?.issues ?? []) {
+    for (const item of issue.evidence) evidence.addRow([page.pageName, issue.id, item.sourceIssueId, item.rule, item.severity ?? issue.severity, item.expected ?? "", item.actual ?? "", item.evidenceConfidence.score, issue.selector ?? "", issue.figmaNodeId ?? ""]);
+  }
   const runInfo = workbook.addWorksheet(input.locale === "en" ? "Run Info" : "运行信息", {
     views: [{ showGridLines: false }]
   });

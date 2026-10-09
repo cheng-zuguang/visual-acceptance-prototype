@@ -99,19 +99,22 @@ test("quantifies a consistent scale and translation bias", async () => {
     }],
     targetViewport: { width: 100, height: 200 }, pixelThreshold: 0.1, locale: "zh-CN"
   });
-  const hybrid = buildHybridActualEvidence({
-    screenshot,
-    live: await live([
-      element("A", "#a", { x: 10, y: 10, width: 20, height: 10 }),
-      element("B", "#b", { x: 40, y: 50, width: 20, height: 10 }),
-      element("C", "#c", { x: 70, y: 90, width: 20, height: 10 })
-    ]),
-    locale: "zh-CN"
-  });
+  const actual = await live([
+    element("A", "#a", { x: 10, y: 10, width: 20, height: 10 }),
+    element("B", "#b", { x: 40, y: 50, width: 20, height: 10 }),
+    element("C", "#c", { x: 70, y: 90, width: 20, height: 10 })
+  ]);
+  actual.samples[0].elements[0].style = { textBounds: { x: 12, y: 12, width: 16, height: 6 }, paddingLeft: 2, paddingRight: 2 };
+  const hybrid = buildHybridActualEvidence({ screenshot, live: actual, locale: "zh-CN" });
 
   assert.ok(Math.abs((hybrid.alignment.transform?.scaleX ?? 0) - 0.9) < 0.001);
   assert.ok(Math.abs((hybrid.alignment.transform?.scaleY ?? 0) - 1.1) < 0.001);
   assert.ok(hybrid.alignment.residualPx < 0.01);
+  const projected = hybrid.projectedLive!.samples[0].elements[0].style;
+  const transform = hybrid.alignment.transform!;
+  assert.ok(Math.abs(projected.textBounds!.x - (12 * transform.scaleX + transform.translateX)) < 0.01);
+  assert.ok(Math.abs(projected.textBounds!.y - (12 * transform.scaleY + transform.translateY)) < 0.01);
+  assert.ok(Math.abs(projected.paddingLeft! - 2 * transform.scaleX) < 0.01);
 });
 
 test("degrades to Screenshot mode for a completely different page state", async () => {

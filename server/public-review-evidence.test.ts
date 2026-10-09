@@ -162,7 +162,7 @@ test("a formerly missing target is fixed when its current existence is independe
   });
 });
 
-test("verified static absence remains failed and never fabricates an actual crop", async () => {
+test("design-only content stays outside acceptance scope and an absence recheck cannot certify absence", async () => {
   const fixture = await reviewFixture();
   fixture.design.root.children = [{ id: "module", parentId: "1:1", type: "FRAME", name: "Policy", box: { x: 10, y: 20, width: 80, height: 100 }, style: {}, children: [
     { id: "title", parentId: "module", type: "TEXT", name: "Policy title", text: "Policy overview", box: { x: 12, y: 25, width: 70, height: 20 }, style: {}, children: [] },
@@ -172,13 +172,21 @@ test("verified static absence remains failed and never fabricates an actual crop
   await withServer(fixture.app, async base => {
     const { result: review } = await completed(base);
     const missing = review.pageResults[0].issues.find((issue: { rule: string }) => issue.rule === "missing_module");
-    assert.ok(missing, JSON.stringify(review.pageResults[0].matching.designCoverage));
-    assert.equal(missing.actualCrop, null);
+    assert.equal(missing, undefined);
+    const coverage = review.pageResults[0].matching.designCoverage;
+    assert.equal(coverage.policy, "actual-driven");
+    assert.equal(coverage.items.length, 3);
+    for (const item of coverage.items) {
+      assert.equal(item.status, "outside-scope");
+      assert.equal(item.reviewStatus, "not-applicable");
+      assert.deepEqual(item.issueIds, []);
+    }
     const { result } = await completed(base, "/v1/issue-rechecks", {
-      name: "Absence recheck", pagePair, issue: { issueId: 503, rule: "missing_module", figmaNodeId: missing.figmaNodeId }
+      name: "Absence recheck", pagePair, issue: { issueId: 503, rule: "missing_module", figmaNodeId: "module" }
     });
-    assert.equal(result.results[0].verdict, "failed");
-    assert.equal(result.results[0].reasonCode, "VERIFIED_ABSENT");
+    assert.equal(result.results[0].verdict, "needs_review");
+    assert.equal(result.results[0].reasonCode, "TARGET_NOT_VERIFIED");
+    assert.equal(result.results[0].coverage.status, "outside-scope");
     assert.equal(result.results[0].actualCrop, null);
     assert.ok(result.results[0].designCrop.downloadUrl);
   });

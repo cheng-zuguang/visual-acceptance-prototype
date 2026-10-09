@@ -6,7 +6,7 @@ export async function generateJevAdvice(input: AdviceInput) {
   if (!input.apiKey?.trim()) throw new Error("Jev requires TYPESAFE_API_KEY.");
   const apiKey = input.apiKey.trim();
   const model = input.model?.trim() || "jev-1.13.0";
-  const evidence = buildAiAdviceEvidence(input.issues, input.pageAlignment, input.locale);
+  const evidence = buildAiAdviceEvidence(input.issues, input.pageAlignment, input.locale, input.relativeLayoutOnly);
   if (!evidence.length) throw new Error("AI advice has no published evidence to rank.");
   const controller = new AbortController();
   const signal = AbortSignal.any([AbortSignal.timeout(60_000), controller.signal]);

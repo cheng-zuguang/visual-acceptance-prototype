@@ -1,3 +1,4 @@
+import { issuePresentation } from "../src/issue-presentation";
 import pixelmatch from "pixelmatch";
 import sharp from "sharp";
 import type {
@@ -40,11 +41,12 @@ import { localText, type Locale } from "./i18n";
 import { analyzeMarketVariants } from "./market-variant";
 import { analyzeMarketLists } from "./market-list";
 import { aggregateReviewIssueResult, type ReviewIssueRewriter } from "./review-issue";
+import { relativeLayoutMeasurements, visualTextAlignment } from "./relative-layout";
 import { evaluateDesignCoverage } from "./design-coverage";
 import { verifyDataDrivenWidths } from "./data-geometry";
 import { reviewCheckRecorder } from "./review-checks";
+import { compareRelativePixels } from "./region-pixels";
 import { identifyReviewRegions } from "./region-correspondence";
-import { alignRegionPixels } from "./region-pixels";
 import {
   pageAlignmentConfidenceLevel,
   scorePageAlignmentConfidence
@@ -417,12 +419,6 @@ function primaryFontFamily(value?: string): string {
     .replace(/[\s_-]+/g, "");
 }
 
-function canonicalLtrTextAlign(value?: string): string {
-  const normalized = (value ?? "").trim().toLocaleLowerCase();
-  if (normalized === "start") return "left";
-  if (normalized === "end") return "right";
-  return normalized;
-}
 
 function comparableDesignElements(truth: DesignTruth): ComparableDesignNode[] {
   const output: ComparableDesignNode[] = [];
@@ -2083,6 +2079,12 @@ export async function compareDesignToPage(
   const actualImage = await sharp(capture.image).resize(width, height, { fit: "fill" }).png().toBuffer();
   const regionCorrespondence = identifyReviewRegions(design.root, evidence, config);
   const designElements = comparableDesignElements({ ...design, root: regionCorrespondence.tree });
+  const layoutDesignInventory: Array<{id: string; parentId?: string; box: Box}> = [];
+  const collectLayoutInventory = (node: DesignTruthNode) => {
+    if (node.box) layoutDesignInventory.push({id: node.id, parentId: node.parentId, box: node.box});
+    node.children.forEach(collectLayoutInventory);
+  };
+  collectLayoutInventory(regionCorrespondence.tree);
   const matching = await elementMatches(
     regionCorrespondence.tree,
     designElements,
@@ -2102,7 +2104,7 @@ export async function compareDesignToPage(
   );
   const marketListAnalysis = analyzeMarketLists(design, capture.elements, locale,
     matching.matches.filter(match => match.method !== "structure-geometry" && match.confidence >= config.thresholds.highConfidenceMin)
-      .map(match => ({design: match.design.node, actual: match.actual})));
+      .map(match => ({design: match.design.node, actual: match.actual})), config.thresholds.positionTolerancePx);
   const verifiedTemplateBindings = [...marketListAnalysis.templateBindings, ...marketListAnalysis.summary.matches.flatMap(list => {
     const row = designElements.find(node => node.id === list.rowTemplate.figmaNodeId);
     return row ? list.rowSelectors.flatMap(selector => {
@@ -2231,36 +2233,22 @@ export async function compareDesignToPage(
       : matching.matches.flatMap((match) => [match.design.box, match.actual.box]),
     normalizationPlan.pixelExclusions
   );
-  if (localRegions.length) {
-    const alignedImage = await alignRegionPixels(actualImage, { width, height }, localRegions.flatMap(region => {
-      const element = capture.elements.find(element => element.selector === region.actualParentSelector);
-      return element ? [{ box: element.box, offset: region.displacement! }] : [];
-    }));
-    const alignBox = (box: Box, designId: string): Box => {
-      const region = localRegions.find(region => subtreeIds(regionNodes.get(region.designParentFigmaNodeId)!).includes(designId));
-      return { ...box, x: box.x - Math.round(region?.displacement?.x ?? 0), y: box.y - Math.round(region?.displacement?.y ?? 0) };
-    };
-    const aligned = await compareVisual(referenceImage, alignedImage, width, height, config.thresholds.pixelThreshold,
-      matching.matches.flatMap(match => [match.design.box, alignBox(match.actual.box, match.design.id)]),
-      [...detectedNormalization.regions, ...(detectedNormalization.geometry ?? []), ...templatePixelExclusions].map(region => ({ designBox: region.designBox, actualBox: alignBox(region.actualBox, region.figmaNodeId) })), true);
-    visual.similarity = aligned.similarity;
-    visual.scope = aligned.scope;
-    visual.regions = aligned.regions;
-  }
+  // Full-image difference remains an artifact. Acceptance pixels are compared only
+  // inside verified corresponding local crops, independently of page displacement.
+  const pixelBindings = matching.matches.filter(match => match.design.id !== design.root.id && !match.actual.visuallyObscured &&
+    match.confidence >= config.thresholds.highConfidenceMin &&
+    (["exact-id", "stable-text", "verified-region", "verified-template"].includes(match.method) ||
+      match.method === "visual-inference" && !match.agentAssisted && normalizeText(match.design.text) && normalizeText(match.design.text) === normalizeText(match.actual.text)) &&
+    !matching.matches.some(child => child !== match && child.design.ancestorIds.includes(match.design.id)) &&
+    !match.design.node.children.length);
+  const relativePixels = await compareRelativePixels({referenceImage, actualImage, viewport:{width,height},
+    pairs: pixelBindings.map(binding => ({designBox:binding.design.box,actualBox:binding.actual.box})),
+    exclusions:normalizationPlan.pixelExclusions,threshold:config.thresholds.pixelThreshold});
+  visual.scope = relativePixels.scope;
+  visual.similarity = relativePixels.similarity;
+  visual.regions = [];
   const create = addIssueFactory();
   const issues: Issue[] = [];
-  for (const region of localRegions) {
-    const displacement = region.displacement!;
-    if (Math.hypot(displacement.x, displacement.y) <= config.thresholds.positionTolerancePx) continue;
-    const node = regionNodes.get(region.designParentFigmaNodeId)!;
-    const actual = capture.elements.find(element => element.selector === region.actualParentSelector)!;
-    issues.push(create({ rule: "region_displacement", category: localText(locale, "区域位移", "Region displacement"), severity: "pending",
-      figmaNodeId: node.id, selector: actual.selector, designBox: node.box, actualBox: actual.box, box: actual.box, evidenceConfidence: region.evidenceConfidence,
-      title: localText(locale, `${node.name} 整体位移（原因待核验）`, `${node.name}: regional displacement needs verification`),
-      summary: localText(locale, `区域整体位移 x ${round(displacement.x)}px、y ${round(displacement.y)}px；内部已按局部坐标独立比较。`,
-        `Region displacement x ${round(displacement.x)}px, y ${round(displacement.y)}px; internal layout is reviewed in regional coordinates.`),
-      suggestion: localText(locale, "核验前序缺失、列表高度或区域位置原因；内部样式问题独立处理。", "Verify preceding omissions, list height or region placement; review internal style findings independently.") }));
-  }
 
   for (const list of marketListAnalysis.summary.matches) {
     const addListIssue = (input: {
@@ -2431,7 +2419,7 @@ export async function compareDesignToPage(
   }
 
   const visualSeverity = severityFor(config, "visual_similarity", "error");
-  if (visualSeverity && visual.similarity < config.thresholds.visualSimilarityMin) {
+  if (visualSeverity && visual.scope.reviewedPixels > 0 && visual.similarity < config.thresholds.visualSimilarityMin) {
     issues.push(
       create({
         category: localText(locale, "视觉相似度", "Visual similarity"),
@@ -2716,7 +2704,28 @@ export async function compareDesignToPage(
     const textGeometryReason = textContainer ? "text-container: independent text layout bounds unavailable" : undefined;
     const localRegion = localRegionFor(match);
     const localBox = { ...actual.box, x: actual.box.x - (localRegion?.displacement?.x ?? 0), y: actual.box.y - (localRegion?.displacement?.y ?? 0) };
-    const positionDelta = Math.hypot(expected.box.x - localBox.x, collapsedBefore ? 0 : expected.box.y - localBox.y);
+    const hasUnmatchedPrecedingSibling = layoutDesignInventory.some(sibling => sibling.id !== expected.id && sibling.parentId === expected.node.parentId &&
+      sibling.box.y + sibling.box.height <= expected.box.y && !matching.matches.some(binding => binding.design.id === sibling.id));
+    const relativeMeasurements = relativeLayoutMeasurements(match, matching.matches, {
+      design: layoutDesignInventory,
+      actual: capture.elements
+    }).filter(item => !(item.axis === "y" &&
+      (collapsedBefore || item.reference === "parent" && hasUnmatchedPrecedingSibling)));
+    const positionDelta = Math.max(0, ...relativeMeasurements.map(item => Math.abs(item.expected - item.actual)));
+    const relativeReason = !relativeMeasurements.length ? "relative-layout: verified parent or consistent neighboring reference unavailable" : undefined;
+    const alignmentParent = matching.matches.find(parent => parent.design.id === expected.node.parentId &&
+      parent.actual.selector === actual.parentSelector && parent.design.node.children.length === 1 &&
+      parent.confidence >= config.thresholds.highConfidenceMin && ["exact-id", "stable-text", "verified-region"].includes(parent.method) &&
+      /flex|grid/.test(parent.actual.style.display ?? ""));
+    const parentDesignAlignment = alignmentParent && (expected.style.textAlign === "right"
+      ? Math.abs(alignmentParent.design.box.x + alignmentParent.design.box.width - (alignmentParent.design.node.layout?.paddingRight ?? 0) - expected.box.x - expected.box.width)
+      : expected.style.textAlign === "center" ? Math.abs(expected.box.x + expected.box.width / 2 - alignmentParent.design.box.x - alignmentParent.design.box.width / 2)
+      : Math.abs(expected.box.x - alignmentParent.design.box.x - (alignmentParent.design.node.layout?.paddingLeft ?? 0)));
+    const useParentAlignment = alignmentParent && parentDesignAlignment !== undefined && parentDesignAlignment <= config.thresholds.positionTolerancePx;
+    const alignmentEvidence = visualTextAlignment(expected.style.textAlign,
+      useParentAlignment ? {...alignmentParent.actual.style, textBounds: actual.style.textBounds} : actual.style,
+      useParentAlignment ? alignmentParent.actual.box : actual.box, config.thresholds.positionTolerancePx,
+      !useParentAlignment && expected.type === "TEXT" && expected.text === actual.text ? expected.box : undefined);
     const intrinsicDynamicWidth = !normalization.textComparable && expected.type === "TEXT" &&
       (expected.node.layout?.sizingHorizontal === "HUG" || expected.node.layout?.textAutoResize === "WIDTH_AND_HEIGHT");
     const uncertainDynamicWidth = !normalization.textComparable && expected.type === "TEXT" && !intrinsicDynamicWidth &&
@@ -2743,8 +2752,8 @@ export async function compareDesignToPage(
             severity,
             title: localText(locale, `${expected.name} 位置偏移`, `${expected.name} is mispositioned`),
             summary: localText(locale, `元素位置偏移 ${round(positionDelta)}px，超过允许值 ${config.thresholds.positionTolerancePx}px。`, `The element is offset by ${round(positionDelta)}px, exceeding the ${config.thresholds.positionTolerancePx}px tolerance.`),
-            expected: `x ${formatPx(expected.box.x, locale)} · y ${formatPx(expected.box.y, locale)}`,
-            actual: `x ${formatPx(localBox.x, locale)} · y ${formatPx(localBox.y, locale)}${localRegion ? " (regional coordinates)" : ""}`,
+            expected: relativeMeasurements.map(item => `${item.reference === "parent" ? "距父级" : "距邻近块"}${item.axis === "x" ? "水平" : "垂直"} ${formatPx(item.expected, locale)}`).join("；"),
+            actual: relativeMeasurements.map(item => `${item.reference === "parent" ? "距父级" : "距邻近块"}${item.axis === "x" ? "水平" : "垂直"} ${formatPx(item.actual, locale)}`).join("；"),
             suggestion: localText(locale, `检查 ${actual.selector} 的定位、容器 padding、margin 和对齐方式。`, `Check positioning, container padding, margins, and alignment for ${actual.selector}.`),
             rule: "position"
           })
@@ -2806,9 +2815,11 @@ export async function compareDesignToPage(
     for (const property of ["x", "y", "width", "height"] as const) {
       const position = property === "x" || property === "y";
       const tolerance = position ? config.thresholds.positionTolerancePx : config.thresholds.sizeTolerancePx;
-      reviewChecks.record({ ...checkContext, property, rule: position ? "position" : "size", expected: expected.box[property], actual: localBox[property],
-        tolerance, differs: Math.abs(expected.box[property] - localBox[property]) > tolerance,
-        pendingReason: textGeometryReason ?? ((property === "y" && collapsedBefore || property === "height" && collapsedSelf) ? stateReason : undefined) ?? (property === "width" && uncertainDynamicWidth ? "dynamic-text: design sizing constraint unavailable" : undefined),
+      reviewChecks.record({ ...checkContext, property, rule: position ? "position" : "size",
+        expected: position ? relativeMeasurements.filter(item => item.axis === property).map(item => `${item.referenceName}: ${item.expected}px`).join("; ") || "邻近参照待核验" : expected.box[property],
+        actual: position ? relativeMeasurements.filter(item => item.axis === property).map(item => `${item.referenceName}: ${item.actual}px`).join("; ") || undefined : localBox[property],
+        tolerance, differs: position ? relativeMeasurements.some(item => item.axis === property && Math.abs(item.expected - item.actual) > tolerance) : Math.abs(expected.box[property] - localBox[property]) > tolerance,
+        pendingReason: textGeometryReason ?? (position ? relativeReason : undefined) ?? ((property === "y" && collapsedBefore || property === "height" && collapsedSelf) ? stateReason : undefined) ?? (property === "width" && uncertainDynamicWidth ? "dynamic-text: design sizing constraint unavailable" : undefined),
         exemption: match.templateStyleOnly && (!templateRow || position) ? "verified-template: geometry reviewed at row/column level"
           : property === "width" && dataWidth ? dataWidth.reason
           : property === "width" && intrinsicDynamicWidth ? "dynamic-text: design permits intrinsic width" : undefined });
@@ -2831,8 +2842,8 @@ export async function compareDesignToPage(
         differs: Math.abs((expectedValue ?? 0) - (actualValue ?? 0)) > tolerance ||
           (property === "borderWidth" && expectedValue !== undefined && actualValue !== undefined && (expectedValue === 0) !== (actualValue === 0)) });
     }
-    reviewChecks.record({ ...checkContext, property: "textAlign", rule: "alignment", expected: expected.style.textAlign, actual: actual.style.textAlign,
-      differs: canonicalLtrTextAlign(expected.style.textAlign) !== canonicalLtrTextAlign(actual.style.textAlign) });
+    reviewChecks.record({ ...checkContext, property: "textAlign", rule: "alignment", expected: alignmentEvidence.expected, actual: alignmentEvidence.actual,
+      differs: alignmentEvidence.differs, pendingReason: alignmentEvidence.pendingReason });
     const statePending = marketVariants.unresolved.some(item => item.figmaNodeId === expected.id && item.selector === actual.selector);
     const stateMatch = marketVariants.matches.find(item => item.figmaNodeId === expected.id && item.selector === actual.selector);
     const stateStyle = marketVariants.catalog.find(item => item.variantNodeId === stateMatch?.expectedVariantNodeId)?.style;
@@ -2902,9 +2913,7 @@ export async function compareDesignToPage(
     }
 
     if (
-      expected.style.textAlign &&
-      actual.style.textAlign &&
-      canonicalLtrTextAlign(expected.style.textAlign) !== canonicalLtrTextAlign(actual.style.textAlign)
+      alignmentEvidence.differs && !alignmentEvidence.pendingReason
     ) {
       const severity = confidenceSeverity(
         severityFor(config, "alignment", "error"),
@@ -2924,14 +2933,14 @@ export async function compareDesignToPage(
             ),
             summary: localText(
               locale,
-              "动态内容已归一化，但文字对齐仍与设计稿不同。",
-              "Dynamic content is normalized, but text alignment still differs from the design."
+              "文字在所在区域内的实际对齐位置与设计稿不同。",
+              "The rendered text alignment within its region differs from the design."
             ),
-            expected: expected.style.textAlign,
-            actual: actual.style.textAlign,
+            expected: alignmentEvidence.expected,
+            actual: alignmentEvidence.actual,
             suggestion: localText(
               locale,
-              `将 ${actual.selector} 的 text-align 调整为设计值。`,
+              "调整文字在所在区域内的对齐位置，使其与设计一致。",
               `Set text-align on ${actual.selector} to the design value.`
             ),
             rule: "alignment"
@@ -3031,6 +3040,7 @@ export async function compareDesignToPage(
   issues.sort((a, b) => severityRank[a.severity] - severityRank[b.severity]);
   const reviewIssueResult = await aggregateReviewIssueResult(issues, locale, {
     rewriter: options.reviewIssueRewriter,
+    relativeLayoutOnly: true,
     moduleAlignment: {
       plan: matching.pageAlignment,
       ...(design.root.box ? { designPageBox: design.root.box } : {}),
@@ -3049,8 +3059,9 @@ export async function compareDesignToPage(
       missingModuleThresholds: config.pageAlignment.missingModule
     }
   });
+  reviewIssueResult.issues = reviewIssueResult.issues.filter(issue => !["missing_module", "design_coverage_unverified", "region_displacement"].includes(issue.rule));
   const coverageResult = evaluateDesignCoverage({
-    design, locale, evidence, issues: reviewIssueResult.issues,
+    design, locale, evidence, policy: "actual-driven", issues: reviewIssueResult.issues,
     verifiedRegions: localRegions, positionTolerancePx: config.thresholds.positionTolerancePx,
     findings: issues,
     dynamicNodeIds: detectedNormalization.regions.map(region => region.figmaNodeId),
@@ -3063,35 +3074,17 @@ export async function compareDesignToPage(
   });
   const removedDisplacementIssues = new Set<string>();
   for (const item of coverageResult.coverage.items) {
-    const region = localRegions.find(region => region.designParentFigmaNodeId === item.figmaNodeId);
-    if (region?.displacement) {
-      const causes = coverageResult.coverage.items.filter(cause => cause.absenceEvidence?.layoutGap?.affectedRegionIds.includes(item.figmaNodeId));
-      const gaps = [...new Map(causes.map(cause => {
-        const gap = cause.absenceEvidence!.layoutGap!; return [`${gap.precedingRegionId}:${gap.followingRegionId}`, gap] as const;
-      })).values()];
-      const causeIssueIds = [...new Set(causes.flatMap(cause => cause.issueIds))];
-      const explainedY = -gaps.reduce((sum, gap) => sum + gap.measuredRemovalPx, 0);
-      const unexplainedY = region.displacement.y - explainedY;
-      const complete = causeIssueIds.length > 0 && Math.hypot(region.displacement.x, unexplainedY) <= config.thresholds.positionTolerancePx;
-      item.displacement = { ...region.displacement, causeIssueIds, explainedY, unexplainedY, causeStatus: complete ? "verified" : causeIssueIds.length ? "partial" : "pending" };
-      item.issueIds = [...new Set([...item.issueIds, ...causeIssueIds])];
-      for (const issue of reviewIssueResult.issues.filter(issue => issue.rule === "region_displacement" && issue.figmaNodeId === item.figmaNodeId)) {
-        if (complete) removedDisplacementIssues.add(issue.id);
-        else if (causeIssueIds.length) {
-          issue.summary = localText(locale, `总位移 y ${region.displacement.y}px；${causes.map(cause => cause.name).join("、")} 缺失链解释 ${explainedY}px，其余 ${unexplainedY}px 原因待核验。`,
-            `Total y displacement ${region.displacement.y}px; the missing chain ${causes.map(cause => cause.name).join(", ")} explains ${explainedY}px. The remaining ${unexplainedY}px requires verification.`);
-        }
-      }
-    }
+    if (!item.selector) { item.reviewStatus = "not-applicable"; continue; }
     item.checks = reviewChecks.byDesign.get(item.figmaNodeId) ?? [];
     item.actualBox = item.checks[0]?.actualBox;
     item.reviewStatus = item.status === "missing" || item.checks.some(check => check.status === "difference") ? "difference"
-      : item.status === "unverified" || item.status === "covered-by-parent" || (item.displacement && item.displacement.causeStatus !== "verified" && Math.hypot(item.displacement.x, item.displacement.y) > config.thresholds.positionTolerancePx) || item.checks.some(check => check.status === "pending") ? "pending"
+      : item.status === "unverified" || item.status === "covered-by-parent" || item.checks.some(check => check.status === "pending") ? "pending"
       : item.checks.some(check => check.status === "passed") ? "passed" : "not-applicable";
   }
   const publishedIssues = [...reviewIssueResult.issues.filter(issue => !removedDisplacementIssues.has(issue.id)), ...coverageResult.issues];
   const publishedById = new Map(publishedIssues.map(issue => [issue.id, issue]));
   for (const item of coverageResult.coverage.items) {
+    if (!item.selector) { item.reviewStatus = "not-applicable"; continue; }
     item.issueIds = item.issueIds.filter(id => !removedDisplacementIssues.has(id));
     const ownFindings = item.issueIds.flatMap(id => {
       const issue = publishedById.get(id);
@@ -3100,12 +3093,17 @@ export async function compareDesignToPage(
     if (ownFindings.some(issue => issue.severity === "error" || issue.severity === "warning")) item.reviewStatus = "difference";
     else if (item.reviewStatus !== "difference" && ownFindings.some(issue => issue.severity === "pending")) item.reviewStatus = "pending";
   }
+  for (const issue of publishedIssues) {
+    const presentation = issuePresentation(issue, locale, {designCoverage: coverageResult.coverage});
+    issue.summary = presentation.summary;
+    issue.suggestion = issue.primaryAction = presentation.suggestion;
+  }
   return {
     referenceImage,
     actualImage,
     diffImage: visual.diff,
     similarity: visual.similarity,
-    issues: [...reviewIssueResult.issues.filter(issue => !removedDisplacementIssues.has(issue.id)), ...coverageResult.issues],
+    issues: publishedIssues,
     matching: {
       designCoverage: coverageResult.coverage,
       visualScope: visual.scope,

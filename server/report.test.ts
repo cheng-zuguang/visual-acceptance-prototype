@@ -561,3 +561,26 @@ test("an empty review ledger cannot certify that a whole page passed", async () 
   const report = createReport({ comparison, source: { design: "Figma", actual: "H5" }, viewport: { width: 10, height: 10 }, rules: parseAcceptanceYaml(), diagnostics: [], durationMs: 1, locale: "en", evidenceMode: "live" });
   assert.equal(report.status, "needs_review");
 });
+
+
+test("zero reviewed pixels show no evaluation instead of perfect similarity in exported reports", async () => {
+  const image = await sharp({ create: { width: 10, height: 10, channels: 4, background: "white" } }).png().toBuffer();
+  for (const locale of ["zh-CN", "en"] as const) {
+    const comparison = emptyComparison(image);
+    comparison.matching.visualScope = { reviewedPixels: 0, changedPixels: 0, excludedPixels: 100, canvasPixels: 100 };
+    const report = createReport({ comparison, source: { design: "Figma", actual: "H5" }, viewport: { width: 10, height: 10 },
+      rules: parseAcceptanceYaml(), diagnostics: [], durationMs: 1, locale, evidenceMode: "screenshot" });
+    for (const content of [report.markdown, report.reportHtml]) {
+      assert.match(content, locale === "en" ? /Not evaluated.*no reliable corresponding region/ : /未评估.*无可靠对应区域/);
+      assert.doesNotMatch(content, /100\.00%/);
+    }
+  }
+});
+
+test("HTML Markdown and JSON expose the same measured design and actual values and detailed correction",async()=>{
+ const image=await sharp({create:{width:10,height:10,channels:4,background:"white"}}).png().toBuffer();const comparison=emptyComparison(image);const issue=reportIssue();issue.rule="typography";issue.summary="字体属性不同";delete issue.expected;delete issue.actual;comparison.issues=[issue];
+ comparison.matching.designCoverage={policy:"actual-driven",items:[{figmaNodeId:issue.figmaNodeId!,name:"未来利率预测",status:"matched",reasonCode:"verified-binding",issueIds:[issue.id],checks:[{property:"fontWeight",rule:"typography",selector:issue.selector!,actualBox:issue.box!,expected:500,actual:400,status:"difference",reason:"measured"}]}]};
+ const output=createReport({comparison,source:{design:"Figma",actual:"H5"},viewport:{width:10,height:10},rules:parseAcceptanceYaml(),diagnostics:[],durationMs:1,locale:"zh-CN",evidenceMode:"live"});
+ for(const text of [output.reportHtml,output.markdown]){assert.match(text,/字重：500/);assert.match(text,/字重：400/);assert.match(text,/字重由 400 调整为 500/);}
+ assert.equal(output.issues[0].expected,"字重：500");assert.equal(output.issues[0].actual,"字重：400");
+});

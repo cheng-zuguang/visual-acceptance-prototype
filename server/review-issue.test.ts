@@ -821,14 +821,15 @@ test("keeps a local position deviation separate from the module displacement", a
   assert.equal(result.some((candidate) => candidate.id === "raw-local"), true);
 });
 
-test("keeps different root causes and page regions as separate ReviewIssues", async () => {
+test("groups properties of one identified element but keeps separate elements apart", async () => {
   const result = await aggregateReviewIssues([
     issue({ rule: "position", title: "卡片位置", selector: "#card-a", box: { x: 0, y: 0, width: 20, height: 20 } }),
     issue({ rule: "typography", title: "卡片字体", selector: "#card-a", box: { x: 0, y: 0, width: 20, height: 20 } }),
     issue({ rule: "position", title: "按钮位置", selector: "#button-b", box: { x: 80, y: 80, width: 20, height: 20 } })
   ], "zh-CN");
 
-  assert.deepEqual(result.map((item) => item.title), ["卡片位置", "卡片字体", "按钮位置"]);
+  assert.deepEqual(result.map((item) => item.title), ["卡片位置", "按钮位置"]);
+  assert.deepEqual(result[0].evidence.map(item => item.rule), ["position", "typography"]);
 });
 
 test("allows Agent wording changes but rejects unsupported parameters", async () => {
@@ -882,4 +883,31 @@ test("assigns P0, P1, P2, and Pending from deterministic severity", async () => 
     issue({ rule: "market_variant", title: "待确认", selector: "#c", severity: "pending" })
   ], "zh-CN");
   assert.deepEqual(result.map((item) => item.priority), ["P0", "P1", "P2", "Pending"]);
+});
+
+
+test("overlapping different identities do not merge and property severity stays traceable", async () => {
+  const box = { x: 0, y: 0, width: 20, height: 20 };
+  const result = await aggregateReviewIssues([
+    issue({ id: "size", rule: "size", title: "概率 尺寸不一致", selector: "body > div:nth-of-type(2)", figmaNodeId: "a", box, suggestion: "调整 body > div:nth-of-type(2) 的 width、height、padding。", severity: "warning" }),
+    issue({ id: "align", rule: "alignment", title: "概率 对齐方式不一致", selector: "body > div:nth-of-type(2)", figmaNodeId: "a", box, severity: "pending" }),
+    issue({ id: "other", rule: "size", title: "收益尺寸不一致", selector: "#other", figmaNodeId: "b", box })
+  ], "zh-CN");
+  assert.equal(result.length, 2);
+  assert.equal(result[0].severity, "pending", "aggregation cannot erase an unresolved property");
+  assert.deepEqual(result[0].evidence.map(item => [item.sourceIssueId, item.severity]), [["size", "warning"], ["align", "pending"]]);
+  assert.equal(result[0].location.description, "概率");
+  assert.doesNotMatch(result[0].primaryAction, /div|padding|width|height/);
+});
+
+
+test("content differences use Chinese copy instructions rather than selector syntax", async () => {
+  const result = await aggregateReviewIssues([
+    issue({ id: "content", rule: "content", title: "公告 文案不一致", selector: "body > div > p", suggestion: "核对 body > div > p 的文案和国际化资源。", expected: "公告内容", actual: "旧文案" }),
+    issue({ id: "font", rule: "typography", title: "公告 排版属性不一致", selector: "body > div > p", expected: "16px", actual: "12px" })
+  ], "zh-CN");
+  assert.equal(result.length, 1);
+  assert.match(result[0].primaryAction, /核对并调整文案/);
+  assert.match(result[0].expected!, /文案：公告内容/);
+  assert.doesNotMatch(result[0].primaryAction, /body|div|p>/);
 });

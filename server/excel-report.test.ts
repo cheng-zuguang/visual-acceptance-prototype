@@ -319,8 +319,14 @@ test("embeds matching design and actual crops with a red issue outline", async (
   const metadata = await Promise.all(media.map((item) => sharp(item.buffer).metadata()));
   assert.deepEqual(
     metadata.map(({ width, height }) => ({ width, height })),
-    [{ width: 54, height: 40 }, { width: 54, height: 40 }]
+    [{ width: 90, height: 72 }, { width: 90, height: 72 }]
   );
+  for (const [index, placement] of sheet.getImages().entries()) {
+    const ext = (placement.range as unknown as { ext: { width: number; height: number } }).ext;
+    assert.ok(ext);
+    const { width, height } = metadata[index];
+    assert.ok(Math.abs(ext.width / ext.height - width! / height!) < 0.01, "embedded crop must preserve its aspect ratio");
+  }
   for (const item of media) {
     const { data, info } = await sharp(item.buffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
     let redPixels = 0;
@@ -347,7 +353,7 @@ test("uses independent design and actual coordinates for evidence crops", async 
 
   assert.deepEqual(
     metadata.map(({ width, height }) => ({ width, height })),
-    [{ width: 72, height: 42 }, { width: 34, height: 34 }]
+    [{ width: 100, height: 62 }, { width: 70, height: 62 }]
   );
 });
 
@@ -370,7 +376,8 @@ test("includes a page summary with verdict, similarity, issue count, and pending
     "验收结论",
     "稳定区域相似度",
     "问题数量",
-    "待确认数量"
+    "待确认数量",
+    "整体视觉汇总"
   ]);
   assert.deepEqual((summary.getRow(4).values as unknown[]).slice(1), [
     "market-home",
@@ -379,7 +386,8 @@ test("includes a page summary with verdict, similarity, issue count, and pending
     "failed",
     0.93,
     1,
-    1
+    1,
+    ""
   ]);
 });
 
@@ -483,4 +491,63 @@ test("a confirmed missing module never receives an invented actual crop in Excel
   const artifact = await buildExcelReportArtifact({ reviewName: "missing", pages: [{ clientPageId: "test", pageName: "test", report: page }], locale: "en" });
   const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(artifact.buffer as never);
   const sheet = workbook.worksheets[0]; assert.equal(sheet.getImages().length, 1);
+});
+
+
+test("moves whole-page visual findings to summary and hides technical identifiers", async () => {
+  const page = await report();
+  page.issues.unshift({ ...reviewIssue(), id: "visual-global", rule: "visual_similarity", summary: "整体视觉相似度未达标。" });
+  const artifact = await buildExcelReportArtifact({ reviewName: "走查", locale: "zh-CN", pages: [{ clientPageId: "page", pageName: "首页", report: page }] });
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(artifact.buffer as never);
+  const issues = workbook.getWorksheet("问题清单")!;
+  assert.equal(issues.rowCount, 4);
+  assert.equal(issues.getCell("J4").value, "position");
+  assert.equal(issues.getColumn(13).hidden, true);
+  assert.equal(workbook.getWorksheet("页面汇总")!.getCell("H4").value, "整体视觉相似度未达标。");
+  assert.equal(workbook.getWorksheet("问题诊断")!.state, "hidden");
+});
+
+
+test("Excel leaves unmeasured similarity empty with a no-evaluation note", async () => {
+  const page = await report();
+  page.summary.stableSimilarity = 1;
+  page.matching.visualScope = { reviewedPixels: 0, changedPixels: 0, excludedPixels: 10000, canvasPixels: 10000 };
+  const artifact = await buildExcelReportArtifact({ reviewName: "走查", locale: "zh-CN", pages: [{ clientPageId: "page", pageName: "首页", report: page }] });
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(artifact.buffer as never);
+  const summary = workbook.getWorksheet("页面汇总")!;
+  assert.equal(summary.getCell("E4").value, null);
+  assert.match(String(summary.getCell("H4").value), /未评估.*无可靠对应区域/);
+});
+
+test("Excel shows measured design and actual typography and an exact adjustment rather than generic font advice", async () => {
+  const page=await report();const issue=reviewIssue();
+  issue.rule="typography";issue.figmaNodeId="weight";issue.title="未来利率预测 排版属性不一致";issue.summary="字重 400 → 500";
+  delete issue.expected;delete issue.actual;
+  issue.primaryAction="调整 body > div 的字体相关 CSS。";issue.selector="body > div";issue.location.description="未来利率预测";
+  page.issues=[issue];page.matching.designCoverage={policy:"actual-driven",items:[{figmaNodeId:"weight",name:"未来利率预测",status:"matched",reasonCode:"verified-binding",issueIds:[issue.id],checks:[{property:"fontWeight",rule:"typography",selector:issue.selector,actualBox:issue.box!,expected:500,actual:400,status:"difference",reason:"measured"}]}]};
+  const artifact=await buildExcelReportArtifact({reviewName:"test",pages:[{clientPageId:"test",pageName:"test",report:page}],locale:"zh-CN"});
+  const workbook=new ExcelJS.Workbook();await workbook.xlsx.load(artifact.buffer as never);const sheet=workbook.getWorksheet("问题清单")!;
+  assert.equal(sheet.getCell("D4").value,"字重：500");assert.equal(sheet.getCell("E4").value,"字重：400");
+  assert.match(String(sheet.getCell("F4").value),/字重.*400.*500/);
+  assert.doesNotMatch(String(sheet.getCell("F4").value),/字号|行高|body|div|CSS/);
+});
+
+test("Excel explains unresolved actual coverage with known content and a verification action rather than empty values", async () => {
+ const page=await report(); const issue=reviewIssue();issue.id="actual-coverage:card";issue.rule="actual_coverage_unverified";issue.severity="pending";issue.location.description="利率观察";delete issue.expected;delete issue.actual;page.issues=[issue];
+ page.matching.designCoverage={policy:"actual-driven",items:[],actualItems:[{selector:".number",name:"20",actualBox:issue.box!,status:"covered-by-parent",reasonCode:"parent-finding",issueIds:[issue.id],coveredBy:issue.id},{selector:".heading",name:"下一次美联储议息决议公布",actualBox:issue.box!,status:"covered-by-parent",reasonCode:"parent-finding",issueIds:[issue.id],coveredBy:issue.id}]};
+ const artifact=await buildExcelReportArtifact({reviewName:"test",pages:[{clientPageId:"test",pageName:"test",report:page}],locale:"zh-CN"});const workbook=new ExcelJS.Workbook();await workbook.xlsx.load(artifact.buffer as never);const sheet=workbook.getWorksheet("问题清单")!;
+ assert.match(String(sheet.getCell("D4").value),/对应关系.*未.*确认/);assert.match(String(sheet.getCell("E4").value),/下一次美联储议息决议公布/);
+ assert.match(String(sheet.getCell("F4").value),/核验.*对应|确认.*对应/);assert.doesNotMatch(String(sheet.getCell("F4").value),/补齐|删除|向左调整/);
+});
+
+test("one Excel row summarizes all confirmed attribute differences without including passing attributes", async () => {
+ const page=await report();const issue=reviewIssue();issue.rule="typography";delete issue.expected;delete issue.actual;page.issues=[issue];
+ const check=(property:string,expected:string|number,actual:string|number,status:"difference"|"passed")=>({property,rule:"typography",selector:issue.selector!,actualBox:issue.box!,expected,actual,status,reason:"measured"});
+ page.matching.designCoverage={policy:"actual-driven",items:[{figmaNodeId:issue.figmaNodeId!,name:"倒计时小时",status:"matched",reasonCode:"verified-binding",issueIds:[issue.id],checks:[check("fontFamily","DIN Pro","DINPro-Medium","difference"),check("fontSize",24,20,"difference"),check("lineHeight",30,30,"passed")]}]};
+ const artifact=await buildExcelReportArtifact({reviewName:"test",pages:[{clientPageId:"test",pageName:"test",report:page}],locale:"zh-CN"});const workbook=new ExcelJS.Workbook();await workbook.xlsx.load(artifact.buffer as never);const sheet=workbook.getWorksheet("问题清单")!;
+ assert.equal(sheet.getCell("D4").value,"字体：DIN Pro；字号：24px");assert.equal(sheet.getCell("E4").value,"字体：DINPro-Medium；字号：20px");
+ assert.match(String(sheet.getCell("F4").value),/差异.*字体.*DINPro-Medium.*DIN Pro.*字号.*20px.*24px/);
+ assert.doesNotMatch(String(sheet.getCell("F4").value),/行高/);assert.equal(sheet.getCell("A5").value,null);
 });

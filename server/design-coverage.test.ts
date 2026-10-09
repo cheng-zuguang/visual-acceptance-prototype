@@ -266,3 +266,62 @@ test("a derived enclosing region never certifies its own unsearched descendants 
   assert.equal(result.coverage.items.find(item => item.figmaNodeId === "0:110")?.reasonCode, "scope-incomplete");  input.design.root.children.find(item => item.id === "outer")!.box!.height = 50;
   assert.ok(!evaluateDesignCoverage(input).issues.some(issue => issue.rule === "missing_module"));
 });
+
+
+test("actual-driven scope accounts for design-only modules without publishing absence", () => {
+  const input = scenario();
+  const result = evaluateDesignCoverage({ ...input, policy: "actual-driven" });
+  assert.equal(result.coverage.policy, "actual-driven");
+  assert.equal(result.coverage.items.length, 5);
+  assert.deepEqual(result.issues, []);
+  const extra = result.coverage.items.find(item => item.figmaNodeId === "policy")!;
+  assert.equal(extra.status, "outside-scope");
+  assert.equal(extra.reasonCode, "outside-actual-scope");
+  assert.equal(extra.reviewStatus, "not-applicable");
+  assert.deepEqual(extra.issueIds, []);
+  assert.equal(extra.absenceEvidence, undefined);
+});
+
+test("actual-driven scope retains uncertainty for visible actual content without correspondence", () => {
+  const input = scenario();
+  const element = { selector: ".actual", tag: "p", text: "实际内容", box, style: {},
+    fingerprint: { key: "actual", identitySource: "dom-structure" as const, tag: "p", selector: ".actual", region: "page", geometryBucket: "g", styleSignature: "s" } };
+  for (const sample of input.evidence.samples) sample.elements = [element];
+  const result = evaluateDesignCoverage({ ...input, policy: "actual-driven" });
+  assert.deepEqual(result.issues.map(issue => issue.rule), ["actual_coverage_unverified"]);
+  assert.equal(result.issues[0].severity, "pending");
+  assert.equal(result.coverage.actualItems?.length, 1);
+});
+
+
+test("a geometry-only guess leaves visible actual content pending in actual-driven scope", () => {
+  const input = scenario();
+  const element = { selector: ".guess", tag: "p", text: "实际可见内容", box, style: {},
+    fingerprint: { key: "guess", identitySource: "dom-structure" as const, tag: "p", selector: ".guess", region: "page", geometryBucket: "g", styleSignature: "s" } };
+  for (const sample of input.evidence.samples) sample.elements = [element];
+  input.matches = [{ figmaNodeId: "visible", selector: ".guess", method: "structure-geometry" }];
+  const result = evaluateDesignCoverage({ ...input, policy: "actual-driven" });
+  assert.equal(result.coverage.items.find(item => item.figmaNodeId === "visible")?.status, "outside-scope");
+  assert.equal(result.coverage.actualItems?.[0].status, "unverified");
+  assert.equal(result.issues[0].rule, "actual_coverage_unverified");
+});
+
+test("actual coverage reports the unresolved content instead of a page wrapper containing verified content", () => {
+  const input = scenario();
+  const element = (selector: string, parentSelector?: string) => ({selector,parentSelector,tag:"div",box,style:{backgroundColor:"#ffffff"},fingerprint:{key:selector,identitySource:"dom-structure" as const,tag:"div",selector,region:"page",geometryBucket:"g",styleSignature:"s"}});
+  for (const sample of input.evidence.samples) sample.elements = [element(".page"), {...element("h1",".page"),text:"利率观察"}, {...element(".news",".page"),text:"实际新增资讯",box:{x:10,y:20,width:80,height:20}}];
+  const result = evaluateDesignCoverage({...input,policy:"actual-driven"});
+  assert.deepEqual(result.issues.map(issue => [issue.selector,issue.actualBox]), [[".news",{x:10,y:20,width:80,height:20}]]);
+  assert.match(result.issues[0].title,/实际新增资讯/);
+});
+
+test("unresolved fields within a bounded card are one local verification action even when its heading is matched", () => {
+  const input=scenario();
+  const element=(selector:string,parentSelector:string|undefined,region:typeof box,text?:string)=>({selector,parentSelector,tag:"div",box:region,text,style:{backgroundColor:"#ffffff"},fingerprint:{key:selector,identitySource:"dom-structure" as const,tag:"div",selector,region:"page",geometryBucket:"g",styleSignature:"s"}});
+  const card={x:5,y:5,width:90,height:35};
+  for(const sample of input.evidence.samples)sample.elements=[element(".page",undefined,box),element(".card",".page",card),element("h1",".card",{x:10,y:8,width:70,height:8},"利率观察"),element(".first",".card",{x:10,y:20,width:30,height:8},"未匹配字段一"),element(".second",".card",{x:45,y:20,width:30,height:8},"未匹配字段二")];
+  const result=evaluateDesignCoverage({...input,policy:"actual-driven"});
+  assert.deepEqual(result.issues.map(issue=>issue.actualBox),[card]);
+  assert.ok(result.coverage.actualItems?.filter(item=>item.selector===".first"||item.selector===".second").every(item=>item.issueIds[0]===result.issues[0].id));
+  assert.match(result.issues[0].title,/利率观察/);
+});

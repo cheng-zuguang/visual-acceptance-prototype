@@ -15,7 +15,7 @@ export function ModuleCoverageFindings({ issues, title, onSelect }: {
   </section>;
 }
 
-const labels: Record<string, string> = { passed: "通过", difference: "差异", pending: "待核验", exempt: "动态豁免", "not-applicable": "不适用", "not-run": "未执行", matched: "已对应", missing: "缺失", unverified: "对应待核验", "covered-by-parent": "归入父问题", "structural-only": "子项已对应" };
+const labels: Record<string, string> = { passed: "通过", difference: "差异", pending: "待核验", exempt: "动态豁免", "not-applicable": "不适用", "not-run": "未执行", "outside-scope": "不在实际审查范围", matched: "已对应", missing: "缺失", unverified: "对应待核验", "covered-by-parent": "归入父问题", "structural-only": "子项已对应" };
 const value = (input: unknown) => input === undefined ? "—" : String(input);
 
 function EvidenceCrop({ src, box, title }: { src?: string; box?: Box; title: string }) {
@@ -58,7 +58,7 @@ export function DesignCoverageDetails({ coverage, title, primary = false, locale
       </details>
     </li>;
   const content = <>
-    <p>{en ? "Correspondence and acceptance are separate. Expand an item to inspect every measurement and exemption." : "对应关系与验收结果分别展示。展开每项可核对测量值、动态豁免和证据。"}</p>
+    <p>{coverage.policy === "actual-driven" ? (en ? "Actual content defines review scope. Design-only items are outside scope; unresolved actual correspondence requires verification." : "以实际内容确定审查范围。设计稿独有内容不参与验收；实际内容的对应关系不明确时仍需核验。") : (en ? "Correspondence and acceptance are separate. Expand an item to inspect every measurement and exemption." : "对应关系与验收结果分别展示。展开每项可核对测量值、动态豁免和证据。")}</p>
     <label>{en ? "Filter results " : "筛选结果 "}<select value={filter} onChange={event => setFilter(event.target.value)}>
       <option value="all">{en ? "All items" : "全部项目"}</option>{["passed", "difference", "pending", "not-applicable"].map(status => <option key={status} value={status}>{label(status)}</option>)}
     </select></label>

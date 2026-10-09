@@ -11,6 +11,7 @@ import type {
   ReviewPriority
 } from "../src/types";
 import type { Locale } from "./i18n";
+import { issuePresentation, reviewRuleLabel } from "../src/issue-presentation";
 import { pageAlignmentConfidenceLevel } from "./page-alignment-confidence";
 
 export interface ReviewIssueRewrite {
@@ -24,6 +25,7 @@ export type ReviewIssueRewriter = (
 ) => Promise<unknown>;
 
 export interface AggregateReviewIssueOptions {
+  relativeLayoutOnly?: boolean;
   rewriter?: ReviewIssueRewriter;
   moduleAlignment?: {
     plan: PageAlignmentPlan;
@@ -75,6 +77,7 @@ function priorityFor(issue: Issue): ReviewPriority {
 function evidenceFor(issue: Issue): ReviewIssueEvidence {
   return {
     sourceIssueId: issue.id,
+    severity: issue.severity,
     rule: issue.rule,
     category: issue.category,
     summary: issue.summary,
@@ -92,9 +95,17 @@ function overlapArea(a: Box, b: Box): number {
     Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
 }
 
+function sameElement(a: Issue, b: Issue): boolean {
+  if (a.figmaNodeId && b.figmaNodeId && a.figmaNodeId !== b.figmaNodeId) return false;
+  if (a.selector && b.selector && a.selector !== b.selector) return false;
+  return Boolean((a.figmaNodeId && a.figmaNodeId === b.figmaNodeId) || (a.selector && a.selector === b.selector));
+}
+
 function sameRegion(a: Issue, b: Issue): boolean {
-  if (a.figmaNodeId && b.figmaNodeId && a.figmaNodeId === b.figmaNodeId) return true;
-  if (a.selector && b.selector && a.selector === b.selector) return true;
+  if (sameElement(a, b)) return true;
+  // Pixel overlays can supplement an identified target; geometry never merges distinct targets.
+  if (a.rule !== "visual_region" && b.rule !== "visual_region") return false;
+  if ((a.figmaNodeId && b.figmaNodeId) || (a.selector && b.selector)) return false;
   if (!a.box || !b.box) return false;
   const overlap = overlapArea(a.box, b.box);
   return overlap / Math.max(1, Math.min(a.box.width * a.box.height, b.box.width * b.box.height)) >= 0.6;
@@ -509,7 +520,13 @@ function structuralMissingModuleReview(
       },
       rule: "missing_module"
     };
-    output.push(asReviewIssue(issue, locale));
+    const item = asReviewIssue(issue, locale);
+    const presentation = issuePresentation(item, locale);
+    item.title = presentation.title;
+    item.location.description = presentation.location;
+    item.summary = presentation.summary;
+    item.primaryAction = item.suggestion = presentation.suggestion;
+    output.push(item);
   }
   return {
     issues: output,
@@ -558,7 +575,7 @@ export async function aggregateReviewIssueResult(
 ): Promise<AggregateReviewIssueResult> {
   const visualRegions = lowLevelIssues.filter((issue) => issue.rule === "visual_region");
   const primaryIssues = lowLevelIssues.filter((issue) => issue.rule !== "visual_region");
-  const modulePositions = options.moduleAlignment
+  const modulePositions = options.moduleAlignment && !options.relativeLayoutOnly
     ? modulePositionIssues(lowLevelIssues, locale, options.moduleAlignment)
     : { issues: [], consumedIds: new Set<string>() };
   const structuralMissingModules = options.moduleAlignment
@@ -567,21 +584,42 @@ export async function aggregateReviewIssueResult(
         issues: [],
         summary: { evaluatedCount: 0, publishedCount: 0, candidates: [] }
       };
-  const output: ReviewIssue[] = [...structuralMissingModules.issues, ...modulePositions.issues];
+  const output: ReviewIssue[] = [...(options.relativeLayoutOnly ? [] : structuralMissingModules.issues), ...modulePositions.issues];
   const modulePositionIssueIds = new Set(modulePositions.issues.map((issue) => issue.id));
 
   for (const issue of primaryIssues) {
     if (modulePositions.consumedIds.has(issue.id)) continue;
     const duplicate = output.find((candidate) =>
       !modulePositionIssueIds.has(candidate.id) &&
-      candidate.rule === issue.rule &&
-      sameRegion(candidate, issue)
+      (candidate.rule === issue.rule || !["missing_module", "design_coverage_unverified", "visual_similarity", "region_displacement"].includes(candidate.rule) && !["missing_module", "design_coverage_unverified", "visual_similarity", "region_displacement"].includes(issue.rule)) &&
+      sameElement(candidate, issue)
     );
     if (duplicate) {
       duplicate.evidence.push(evidenceFor(issue));
+      if (severityOrder[issue.severity] < severityOrder[duplicate.severity] || issue.severity === "pending" && duplicate.severity !== "error") {
+        duplicate.severity = issue.severity;
+        duplicate.priority = priorityFor(issue);
+        duplicate.evidenceConfidence = issue.evidenceConfidence;
+      }
+      if (issue.severity === duplicate.severity && issue.evidenceConfidence.score < duplicate.evidenceConfidence.score) {
+        duplicate.evidenceConfidence = issue.evidenceConfidence;
+      }
+      const actionable = duplicate.evidence.filter(item => item.rule !== "visual_region");
+      duplicate.expected = actionable.map(item => `${reviewRuleLabel(item.rule)}：${item.expected ?? "—"}`).join("；");
+      duplicate.actual = actionable.map(item => `${reviewRuleLabel(item.rule)}：${item.actual ?? "—"}`).join("；");
+      const presentation = issuePresentation(asReviewIssue(issue, locale), locale);
+      duplicate.primaryAction = [...new Set([duplicate.primaryAction, presentation.suggestion])].join(" ");
+      duplicate.suggestion = duplicate.primaryAction;
+      duplicate.summary = actionable.map(item => item.summary).join("；");
       continue;
     }
-    output.push(asReviewIssue(issue, locale));
+    const item = asReviewIssue(issue, locale);
+    const presentation = issuePresentation(item, locale);
+    item.title = presentation.title;
+    item.location.description = presentation.location;
+    item.summary = presentation.summary;
+    item.primaryAction = item.suggestion = presentation.suggestion;
+    output.push(item);
   }
 
   for (const visual of visualRegions) {
@@ -604,6 +642,20 @@ export async function aggregateReviewIssueResult(
       issue.suggestion = rewrite.suggestion;
       issue.primaryAction = rewrite.suggestion;
     }
+  }
+  for (const issue of output) {
+    const presentation = issuePresentation(issue, locale);
+    issue.title = presentation.title;
+    issue.location.description = presentation.location;
+    issue.summary = presentation.summary;
+    issue.primaryAction = issue.suggestion = presentation.suggestion;
+  }
+  for (const issue of output) {
+    const presentation = issuePresentation(issue, locale);
+    issue.title = presentation.title;
+    issue.location.description = presentation.location;
+    issue.summary = presentation.summary;
+    issue.primaryAction = issue.suggestion = presentation.suggestion;
   }
   return { issues: output, missingModules: structuralMissingModules.summary };
 }

@@ -859,6 +859,7 @@ export class ReviewService {
         apiUrl,
         model: provider === "jev" ? input.options.jevModel?.trim() || this.environment?.TYPESAFE_MODEL : input.options.model,
         issues: input.comparison.issues,
+        relativeLayoutOnly: input.comparison.matching.designCoverage?.policy === "actual-driven",
         pageAlignment,
         locale: input.locale
       }) };

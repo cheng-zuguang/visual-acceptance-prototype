@@ -1,3 +1,4 @@
+import { actionableAdvicePriorities, issuePresentation, pixelScopePresentation, similarityPresentation } from "./issue-presentation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
@@ -512,7 +513,7 @@ function issueBoxFor(issue: ReviewIssue, side: EvidenceSide): Issue["box"] | und
 }
 
 function IssueAnnotations(props: { report: CompareReport; side: EvidenceSide; selectedIssue?: ReviewIssue; onSelect: (issue: ReviewIssue) => void }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const positioned = props.report.issues
     .map((issue) => ({ issue, box: issueBoxFor(issue, props.side) }))
     .filter((entry): entry is { issue: ReviewIssue; box: NonNullable<Issue["box"]> } => Boolean(entry.box))
@@ -525,7 +526,7 @@ function IssueAnnotations(props: { report: CompareReport; side: EvidenceSide; se
       width: `${(box.width / props.report.viewport.width) * 100}%`,
       height: `${(box.height / props.report.viewport.height) * 100}%`
     };
-    return <button type="button" className={`issue-box ${issue.severity} ${selected ? "selected" : ""}`} style={style} aria-pressed={selected} aria-label={t("viewer.selectIssue", { id: issue.id.replace("issue-", "#"), title: issue.title })} key={issue.id} onClick={() => props.onSelect(issue)}><i aria-hidden="true">{issue.id.replace("issue-", "#")}</i></button>;
+    return <button type="button" className={`issue-box ${issue.severity} ${selected ? "selected" : ""}`} style={style} aria-pressed={selected} aria-label={t("viewer.selectIssue", { id: issuePresentation(issue, locale, props.report.matching).identifier, title: issue.title })} key={issue.id} onClick={() => props.onSelect(issue)}><i aria-hidden="true">{issuePresentation(issue, locale, props.report.matching).identifier}</i></button>;
   })}</div>;
 }
 
@@ -555,19 +556,22 @@ function CompareViewer({ report, selectedIssue, onSelect }: { report: CompareRep
 }
 
 function IssueList(props: { report: CompareReport; selected?: ReviewIssue; onSelect: (issue: ReviewIssue) => void }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [filter, setFilter] = useState<IssueFilter>("all");
+  const [tab, setTab] = useState<"issues" | "summary">("issues");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const visibleIssues = props.report.issues.filter(issue => issue.rule !== "visual_similarity");
   const counts = useMemo(() => ({
-    all: props.report.issues.length,
-    error: props.report.issues.filter((issue) => issue.severity === "error").length,
-    warning: props.report.issues.filter((issue) => issue.severity === "warning").length,
-    pending: props.report.issues.filter((issue) => issue.severity === "pending").length,
-    info: props.report.issues.filter((issue) => issue.severity === "info").length
+    all: visibleIssues.length,
+    error: visibleIssues.filter((issue) => issue.severity === "error").length,
+    warning: visibleIssues.filter((issue) => issue.severity === "warning").length,
+    pending: visibleIssues.filter((issue) => issue.severity === "pending").length,
+    info: visibleIssues.filter((issue) => issue.severity === "info").length
   }), [props.report]);
-  const issues = filter === "all" ? props.report.issues : props.report.issues.filter((issue) => issue.severity === filter);
+  const issues = filter === "all" ? visibleIssues : visibleIssues.filter((issue) => issue.severity === filter);
   useEffect(() => {
     if (!props.selected || !scrollRef.current) return;
+    setTab("issues");
     const container = scrollRef.current;
     const row = container.querySelector<HTMLElement>(`[data-issue-id="${props.selected.id}"]`);
     if (!row) return;
@@ -578,16 +582,22 @@ function IssueList(props: { report: CompareReport; selected?: ReviewIssue; onSel
   }, [props.selected]);
   return (
     <aside className="issue-panel">
-      <header><div><span className="mono-label">{t("issues.eyebrow")}</span><h2>{t("issues.title")} <em>{props.report.issues.length}</em></h2></div><SlidersHorizontal size={17} /></header>
-      <div className="filter-row">{(["all", "error", "warning", "pending"] as const).map((value) => <button type="button" aria-pressed={filter === value} key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{value === "all" ? t("issues.all") : t(`severity.${value}`)}<span>{counts[value]}</span></button>)}</div>
+      <header><div><span className="mono-label">{t("issues.eyebrow")}</span><h2>{t("issues.title")} <em>{visibleIssues.length}</em></h2></div><SlidersHorizontal size={17} /></header>
+      <div className="filter-row" role="tablist" aria-label={locale === "en" ? "Report views" : "报告视图"}>
+        <button type="button" role="tab" aria-selected={tab === "issues"} onClick={() => setTab("issues")}>{locale === "en" ? "Issues" : "问题清单"}</button>
+        <button type="button" role="tab" aria-selected={tab === "summary"} onClick={() => setTab("summary")}>{locale === "en" ? "Page summary" : "页面汇总"}</button>
+      </div>
+      {tab === "summary" && <div className="issue-scroll" role="tabpanel"><p>{t("report.similarity")}：{similarityPresentation(props.report.summary.stableSimilarity, props.report.matching, locale)}</p>{props.report.matching.visualScope && <p>{pixelScopePresentation(props.report.matching.visualScope, locale)}</p>}{props.report.aiAdvice && <div><b>{locale === "en" ? "AI summary" : "AI 汇总"}</b><MarkdownContent markdown={props.report.aiAdvice.summary} /></div>}{props.report.issues.filter(issue => issue.rule === "visual_similarity").map(issue => <div key={issue.id}><b>{issue.title}</b><p>{issue.summary}</p><p>{issuePresentation(issue, locale, props.report.matching).suggestion}</p></div>)}</div>}
+      {tab === "issues" && <><div className="filter-row">{(["all", "error", "warning", "pending"] as const).map((value) => <button type="button" aria-pressed={filter === value} key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{value === "all" ? t("issues.all") : t(`severity.${value}`)}<span>{counts[value]}</span></button>)}</div>
       <div className="issue-scroll" ref={scrollRef}>
         {issues.length === 0 && <div className="empty-issues"><CheckCircle2 size={24} /><b>{t("issues.empty")}</b></div>}
         {issues.map((issue) => {
+          const presentation = issuePresentation(issue, locale, props.report.matching);
           const Icon = severityIcons[issue.severity];
           const confidencePercent = Math.round(issue.evidenceConfidence.score * 100);
-          return <button type="button" data-issue-id={issue.id} aria-pressed={props.selected?.id === issue.id} className={`issue-row ${issue.severity} ${props.selected?.id === issue.id ? "selected" : ""}`} key={issue.id} onClick={() => props.onSelect(issue)}><span className="severity-icon"><Icon size={16} /></span><span className="issue-copy"><small>{issue.category} · {issue.id.replace("issue-", "#")}</small><b>{issue.title}</b><p>{issue.summary}</p>{issue.selector && <code>{issue.selector}</code>}<span className="suggestion"><ArrowRight size={13} />{issue.suggestion}</span></span><span className={`confidence ${issue.evidenceConfidence.level}`} title={t("issues.confidenceHelp", { percent: confidencePercent })}><small>{t("issues.confidence")}</small><b>{confidencePercent}%</b><em>{t(`issues.confidence.${issue.evidenceConfidence.level}`)}</em></span></button>;
+          return <button type="button" data-issue-id={issue.id} aria-pressed={props.selected?.id === issue.id} className={`issue-row ${issue.severity} ${props.selected?.id === issue.id ? "selected" : ""}`} key={issue.id} onClick={() => props.onSelect(issue)}><span className="severity-icon"><Icon size={16} /></span><span className="issue-copy"><small>{issue.category} · {issuePresentation(issue, locale, props.report.matching).identifier}</small><b>{presentation.title}</b><p>{presentation.summary}</p><span className="suggestion"><ArrowRight size={13} />{presentation.suggestion}</span></span><span className={`confidence ${issue.evidenceConfidence.level}`} title={t("issues.confidenceHelp", { percent: confidencePercent })}><small>{t("issues.confidence")}</small><b>{confidencePercent}%</b><em>{t(`issues.confidence.${issue.evidenceConfidence.level}`)}</em></span></button>;
         })}
-      </div>
+      </div></>}
     </aside>
   );
 }
@@ -596,9 +606,13 @@ function StructureCompletenessCard(props: {
   report: CompareReport;
   onSelectIssue: (issue: ReviewIssue) => void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const model = useMemo(() => buildStructureReportModel(props.report), [props.report]);
   if (!model.visible) return null;
+  if (props.report.matching.designCoverage?.policy === "actual-driven") {
+    return model.incomplete ? <section className="structure-card"><p role="alert" className="review-incomplete">{locale === "en" ? "Element correspondence review is incomplete; inspect pending findings or rerun the review." : "元素对应关系审查未完整完成，请复核待确认项或重新走查。"}</p></section> : null;
+  }
+
 
   return (
     <section className="structure-card" aria-labelledby="structure-card-title">
@@ -681,7 +695,7 @@ function StructureCompletenessCard(props: {
 function ReportStep({ report, onReset }: { report: CompareReport; onReset: () => void }) {
   const { t, locale } = useI18n();
   const comparisonRef = useRef<HTMLDivElement>(null);
-  const [selected, setSelected] = useState<ReviewIssue | undefined>(report.issues[0]);
+  const [selected, setSelected] = useState<ReviewIssue | undefined>(report.issues.find(issue => issue.rule !== "visual_similarity"));
   const xlsx = report.artifacts?.xlsx;
   const zip = report.artifacts?.zip;
   const exportJson = () => {
@@ -694,17 +708,16 @@ function ReportStep({ report, onReset }: { report: CompareReport; onReset: () =>
         <div className="report-verdict"><span className="verdict-icon">{report.status === "passed" ? <CheckCircle2 size={24} /> : <XCircle size={24} />}</span><div><span className="mono-label">{t("report.eyebrow")}</span><h1>{report.status === "passed" ? t("report.passed") : report.status === "needs_review" ? (locale === "en" ? "Needs review" : "待复核") : t("report.failed")}</h1><p>{report.source.design} · {report.source.actual}</p></div></div>
         <div className="report-actions"><button className="ghost-button" onClick={onReset}><RotateCcw size={15} />{t("report.new")}</button><div className="download-menu"><button className="primary-button compact"><Download size={15} />{t("report.export")}<ChevronDown size={14} /></button><div>{zip && <button className="download-all" onClick={() => downloadRemote(zip.downloadUrl, zip.filename)}>{t("report.export.all")}</button>}<button onClick={() => downloadText(report.reportHtml, `difflab-${report.id}.html`, "text/html")}>{t("report.export.html")}</button><button onClick={() => downloadText(report.markdown, `difflab-${report.id}.md`, "text/markdown")}>{t("report.export.markdown")}</button>{xlsx && <button onClick={() => downloadRemote(xlsx.downloadUrl, xlsx.filename)}>{t("report.export.xlsx")}</button>}<button onClick={exportJson}>{t("report.export.json")}</button><button onClick={() => downloadDataUrl(report.images.diff, `difflab-${report.id}-diff.png`)}>{t("report.export.diff")}</button></div></div></div>
       </header>
-      {report.matching.visualScope && <p className="review-scope-note">{locale === "en" ? "Pixel scope · reviewed / exempt / full image" : "像素范围 · 已审查 / 已豁免 / 整图"}: {report.matching.visualScope.reviewedPixels.toLocaleString()} / {report.matching.visualScope.excludedPixels.toLocaleString()} / {report.matching.visualScope.canvasPixels.toLocaleString()}</p>}
-      {report.matching.designCoverage && <DesignCoverageDetails primary coverage={report.matching.designCoverage} title={locale === "en" ? "Design review checklist" : "设计走查清单"} locale={locale} images={report.images} onSelectIssue={id => { const issue = report.issues.find(item => item.id === id); if (issue) { setSelected(issue); comparisonRef.current?.scrollIntoView({ block: "start", behavior: "instant" }); } }} />}
+      {report.matching.visualScope && <p className="review-scope-note">{locale === "en" ? "Pixel scope · reviewed / exempt / full image" : "像素范围 · 已审查 / 未纳入 / 整图"}: {report.matching.visualScope.reviewedPixels.toLocaleString()} / {report.matching.visualScope.excludedPixels.toLocaleString()} / {report.matching.visualScope.canvasPixels.toLocaleString()}</p>}
+      {report.matching.designCoverage && <DesignCoverageDetails coverage={report.matching.designCoverage} title={locale === "en" ? "Design review checklist" : "设计走查清单"} locale={locale} images={report.images} onSelectIssue={id => { const issue = report.issues.find(item => item.id === id); if (issue) { setSelected(issue); comparisonRef.current?.scrollIntoView({ block: "start", behavior: "instant" }); } }} />}
       {report.aiAdvice && <section className="ai-card"><header><span className="ai-card-icon"><Sparkles size={20} /></span><span><b>{t("report.ai.title")}</b><small>{t("report.ai.help")}{report.aiAdvice.model ? ` · ${report.aiAdvice.model}` : ""}</small></span></header>
-        <p className="ai-reading-guide">{locale === "en" ? `${report.aiAdvice.priorities.length} suggestion groups. Locate issue opens the comparison below. Pending items still require verification.` : `共 ${report.aiAdvice.priorities.length} 组建议。点击「定位问题」跳到下方对照图；待核验项不代表已确认缺失。`}</p>
+        <p className="ai-reading-guide">{locale === "en" ? `${actionableAdvicePriorities(report.aiAdvice.priorities, report.issues).length} suggestion groups. Locate issue opens the comparison below. Pending items still require verification.` : `共 ${actionableAdvicePriorities(report.aiAdvice.priorities, report.issues).length} 组建议。点击「定位问题」跳到下方对照图；待核验项不代表已确认缺失。`}</p>
         {report.aiAdviceRejection && <p className="ai-partial-warning">{locale === "en" ? "AI suggestions are incomplete; see the failure diagnostic." : "AI 建议未完整生成，以下仅为已完成部分。"}</p>}
-        <details className="ai-summary-details"><summary>{locale === "en" ? "Full summary" : "完整汇总原文"}</summary><MarkdownContent markdown={report.aiAdvice.summary} /></details>
         <AiAdvicePriorities priorities={report.aiAdvice.priorities} issues={report.issues} regions={report.matching.pageAlignment.regions} label={t("report.ai.details")} locale={locale} onSelect={issue => { setSelected(issue); comparisonRef.current?.scrollIntoView({ block: "start", behavior: "instant" }); comparisonRef.current?.focus({ preventScroll: true }); }} /></section>}
       <StructureCompletenessCard report={report} onSelectIssue={setSelected} />
       <AgentMatchingDiagnosticsCard evidence={report.matching.semanticAgent} t={t} />
       <div className="metrics-grid">
-        <article className="metric-card score"><span>{t("report.similarity")}</span><strong>{(report.summary.stableSimilarity * 100).toFixed(2)}<small>%</small></strong><i style={{ "--score": `${report.summary.stableSimilarity * 100}%` } as React.CSSProperties} /></article>
+        <article className="metric-card score"><span>{t("report.similarity")}</span>{report.matching.visualScope?.reviewedPixels === 0 ? <><strong>{locale === "en" ? "Not evaluated" : "未评估"}</strong><small>{locale === "en" ? "No reliable corresponding region" : "无可靠对应区域"}</small></> : <><strong>{(report.summary.stableSimilarity * 100).toFixed(2)}<small>%</small></strong><i style={{ "--score": `${report.summary.stableSimilarity * 100}%` } as React.CSSProperties} /></>}</article>
         <article className="metric-card dynamic"><span>{t("report.dynamicRatio")}</span><strong>{(report.summary.dynamicRegionAreaRatio * 100).toFixed(2)}<small>%</small></strong><small>{t("report.dynamicRegions", { count: report.dynamicNormalization.regions.length })}</small></article>
         <article className="metric-card strategy"><span>{t("report.strategy")}</span><strong>{report.dynamicNormalization.strategies.join(", ") || t("report.strategy.none")}</strong></article>
         <article className="metric-card error"><span>{t("severity.error")}</span><strong>{report.summary.errors}</strong><small>{t("report.errorHelp")}</small></article>

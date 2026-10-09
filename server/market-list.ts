@@ -4,6 +4,7 @@ import type {
   DesignTruthNode,
   MarketListSummary
 } from "../src/types";
+import { canonicalTextAlignment, visualTextAlignment } from "./relative-layout";
 import { localText, type Locale } from "./i18n";
 
 export interface MarketListTemplateBinding {
@@ -104,7 +105,8 @@ export function analyzeMarketLists(
   design: DesignTruth,
   elements: ActualEvidenceElement[],
   locale: Locale,
-  verifiedBindings: MarketListTemplateBinding[] = []
+  verifiedBindings: MarketListTemplateBinding[] = [],
+  alignmentTolerancePx = 4
 ): MarketListAnalysis {
   const summary: MarketListSummary = { matches: [], unresolved: [] };
   const templateBindings: MarketListTemplateBinding[] = [];
@@ -204,15 +206,29 @@ export function analyzeMarketLists(
     );
     const representativeRow = rows[0];
     const columns = (actualColumnCount === designFields.length ? designFields : [])
-      .map((column, index) => ({
-      index,
-      figmaNodeId: column.id,
-      name: column.name,
-      expectedWidth: column.relativeBox?.width ?? column.box?.width ?? 0,
-      actualWidth: median(cellsByRow.map((cells) => cells[index].box.width)),
-      expectedAlignment: column.style.textAlign,
-      actualAlignment: cellsByRow[0][index].style.textAlign
-    }));
+      .map((column, index) => {
+        const expectedAlignment = column.style.textAlign ? canonicalTextAlignment(column.style.textAlign) : undefined;
+        const alignments = cellsByRow.map(cells => {
+          const cell = cells[index];
+          return cell.visuallyObscured
+            ? { differs: false, pendingReason: "alignment: cell obscured" }
+            : visualTextAlignment(expectedAlignment, cell.style, cell.box, alignmentTolerancePx);
+        });
+        const mismatch = alignments.find(alignment => alignment.differs && !alignment.pendingReason);
+        // A mismatch in any verified row survives; agreement requires evidence for every row.
+        const actualAlignment = mismatch?.actual ?? (
+          alignments.every(alignment => !alignment.pendingReason) ? expectedAlignment : undefined
+        );
+        return {
+          index,
+          figmaNodeId: column.id,
+          name: column.name,
+          expectedWidth: column.relativeBox?.width ?? column.box?.width ?? 0,
+          actualWidth: median(cellsByRow.map((cells) => cells[index].box.width)),
+          expectedAlignment,
+          actualAlignment
+        };
+      });
     summary.matches.push({
       figmaNodeId: template.container.id,
       ...(template.kind ? {kind: template.kind} : {}),

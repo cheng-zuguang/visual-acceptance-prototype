@@ -477,6 +477,7 @@ export type AdviceInput = {
   model?: string;
   issues: ReviewIssue[];
   pageAlignment: PageAlignmentPlan;
+  relativeLayoutOnly?: boolean;
   locale: Locale;
 };
 
@@ -488,7 +489,7 @@ export class PartialAiAdviceError extends Error {
 }
 
 export async function generateAiAdvice(input: AdviceInput): Promise<AiAdvice> {
-  const evidence = buildAiAdviceEvidence(input.issues, input.pageAlignment, input.locale);
+  const evidence = buildAiAdviceEvidence(input.issues, input.pageAlignment, input.locale, input.relativeLayoutOnly);
   const signal = AbortSignal.timeout(60_000);
   if (evidence.length <= 64) return generateAiAdviceBatch(input, evidence, signal);
   const completed: AiAdvice[] = [];

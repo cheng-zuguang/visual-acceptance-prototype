@@ -6,3 +6,5 @@ Name records as `NNNN-short-decision-title.md`. Each record should state the con
 
 - [0001 Keep Prometheus target inventory external](./0001-keep-prometheus-target-inventory-external.md)
 - [0002 Design-driven coverage replaces silent intersection omission](./0002-design-driven-coverage.md)
+
+- [0003 Actual-driven scope and relative layout review](./0003-actual-driven-relative-review.md)

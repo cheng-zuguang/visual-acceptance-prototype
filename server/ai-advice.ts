@@ -49,9 +49,10 @@ function matchedAlignmentEvidence(
 export function buildAiAdviceEvidence(
   issues: ReviewIssue[],
   pageAlignment: PageAlignmentPlan,
-  locale: Locale
+  locale: Locale,
+  relativeLayoutOnly = false
 ): AiAdviceEvidence[] {
-  const issueEvidence: AiAdviceEvidence[] = issues.map((issue) => ({
+  const issueEvidence: AiAdviceEvidence[] = issues.filter(issue => issue.rule !== "visual_similarity").map((issue) => ({
     ref: `review-issue:${issue.id}`,
     kind: "review-issue",
     title: issue.title,
@@ -73,7 +74,7 @@ export function buildAiAdviceEvidence(
       evidenceConfidence: issue.evidenceConfidence
     }
   }));
-  const alignmentEvidence = pageAlignment.regions
+  const alignmentEvidence = (relativeLayoutOnly ? [] : pageAlignment.regions)
     .map((region) => matchedAlignmentEvidence(region, locale))
     .filter((item): item is AiAdviceEvidence => Boolean(item));
   return [...issueEvidence, ...alignmentEvidence];

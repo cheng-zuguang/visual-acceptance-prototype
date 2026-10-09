@@ -1,3 +1,5 @@
+> Current policy (2026-10-08): ADR 0003 supersedes the design-driven publication policy below for newly executed Reviews. ActualEvidence defines scope. Design-only items remain in the ledger as `outside-scope` / `not-applicable`, without missing-module findings. Actual content lacking correspondence remains pending. The historical criteria below remain for saved-report replay and calibration.
+
 # 设计驱动的逐项走查
 
 当前默认策略取代旧“只比交集、未匹配忽略”的规则。HTTP、MCP 和网页仍复用同一个比较链路，无新接口或开关。

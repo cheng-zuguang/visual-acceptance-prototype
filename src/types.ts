@@ -16,6 +16,14 @@ export interface ElementStyle {
   lineHeight?: number;
   letterSpacing?: number;
   textAlign?: string;
+  display?: string;
+  direction?: string;
+  flexDirection?: string;
+  justifyContent?: string;
+  alignItems?: string;
+  paddingLeft?: number;
+  paddingRight?: number;
+  textBounds?: Box;
   borderColor?: string;
   borderWidth?: number;
   borderRadius?: number;
@@ -560,7 +568,7 @@ export interface PropertyReviewCheck {
 }
 
 export interface DesignCoverage {
-  policy: "design-driven";
+  policy: "design-driven" | "actual-driven";
   actualItems?: Array<{
     selector: string; name: string; actualBox: Box;
     status: "unverified" | "covered-by-parent"; reasonCode: string; issueIds: string[]; coveredBy?: string; tileIndex?: number;
@@ -578,8 +586,8 @@ export interface DesignCoverage {
     checks?: PropertyReviewCheck[];
     displacement?: { x: number; y: number; causeIssueIds: string[]; causeStatus: "verified" | "partial" | "pending"; explainedY: number; unexplainedY: number };
     reviewStatus?: "passed" | "difference" | "pending" | "not-applicable";
-    status: "matched" | "missing" | "unverified" | "covered-by-parent" | "structural-only";
-    reasonCode: "verified-binding" | "scope-incomplete" | "correspondence-unresolved" | "static-module-absent" | "parent-finding" | "descendant-bindings";
+    status: "matched" | "missing" | "unverified" | "covered-by-parent" | "structural-only" | "outside-scope";
+    reasonCode: "outside-actual-scope" | "verified-binding" | "scope-incomplete" | "correspondence-unresolved" | "static-module-absent" | "parent-finding" | "descendant-bindings";
     selector?: string;
     issueIds: string[];
     coveredBy?: string;
@@ -891,6 +899,7 @@ export interface Issue {
 export type ReviewPriority = "P0" | "P1" | "P2" | "Pending";
 
 export interface ReviewIssueEvidence {
+  severity?: Severity;
   sourceIssueId: string;
   rule: string;
   category: string;

@@ -39,7 +39,7 @@ function design(image: Buffer): DesignTruth {
   };
 }
 
-test("long screenshots preserve design coverage with absolute coordinates and final tile issue refs", async () => {
+test("long screenshots retain design-only coverage in absolute coordinates without missing findings", async () => {
   const image = await stripedImage(240);
   const truth = design(image);
   truth.root.children.push({ id: "missing-label", name: "投票", type: "TEXT", text: "投票",
@@ -52,8 +52,11 @@ test("long screenshots preserve design coverage with absolute coordinates and fi
   const item = report.matching.designCoverage?.items.find(item => item.figmaNodeId === "missing-label");
   assert.ok(item);
   assert.equal(item.designBox?.y, 110);
-  assert.ok(item.issueIds.length > 0);
-  assert.ok(item.issueIds.every(id => report.issues.some(issue => issue.id === id)));
+  assert.equal(report.matching.designCoverage?.policy, "actual-driven");
+  assert.equal(item.status, "outside-scope");
+  assert.equal(item.reviewStatus, "not-applicable");
+  assert.deepEqual(item.issueIds, []);
+  assert.equal(report.issues.some(issue => issue.rule === "missing_module"), false);
 });
 
 function liveElement(text: string, selector: string, y: number): ActualEvidenceElement {
@@ -329,7 +332,7 @@ test("detects a repeated strip at a viewport boundary as a stitching anomaly", a
   assert.ok(evidence.confidenceCap < 0.7);
 });
 
-test("reviews every tile and maps a ReviewIssue back to its absolute long-page position", async () => {
+test("reviews every tile and retains absolute position evidence without inferring a shift from page coordinates", async () => {
   const image = await stripedImage(240);
   const truth = design(image);
   truth.source = {
@@ -377,15 +380,22 @@ test("reviews every tile and maps a ReviewIssue back to its absolute long-page p
     }
   });
 
-  const issue = report.issues.find((candidate) => candidate.figmaNodeId === "2:price" && candidate.rule === "position");
   assert.equal(report.evidenceMode, "long_screenshot");
   assert.equal(report.longScreenshot?.tiles.length, 3);
-  assert.deepEqual(issue?.location.longScreenshot, {
-    tileIndex: 1,
-    scrollY: 100,
-    absoluteBox: { x: 10, y: 130, width: 30, height: 12 }
-  });
-  assert.deepEqual(issue?.location.box, { x: 10, y: 130, width: 30, height: 12 });
+  const item = report.matching.designCoverage?.items.find(item => item.figmaNodeId === "2:price");
+  assert.ok(item);
+  assert.equal(item.tileIndex, 1);
+  assert.deepEqual(item.designBox, { x: 10, y: 120, width: 30, height: 12 });
+  assert.deepEqual(item.actualBox, { x: 10, y: 130, width: 30, height: 12 });
+  const positionChecks = item.checks?.filter(check => check.rule === "position");
+  assert.equal(positionChecks?.length, 2);
+  for (const check of positionChecks ?? []) {
+    assert.equal(check.status, "pending");
+    assert.match(check.reason, /relative-layout/);
+    assert.deepEqual(check.actualBox, { x: 10, y: 130, width: 30, height: 12 });
+  }
+  assert.equal(report.issues.some(issue => issue.figmaNodeId === "2:price" && issue.evidence.some(item => item.rule === "position")), false,
+    "an absolute vertical shift alone cannot establish a relative-layout defect");
 });
 
 test("recognizes a sticky navigation copy and suppresses issues from its repeated tile", async () => {

@@ -4,6 +4,8 @@ import { coverageModuleName, coverageModuleTree } from "./design-coverage-module
 /** Total design-side accounting, independent of Agent candidate budgets. */
 export function evaluateDesignCoverage(input: {
   design: DesignTruth;
+  /** Production uses actual-driven; design-driven remains available for historical replay. */
+  policy?: DesignCoverage["policy"];
   matches: Array<{ figmaNodeId: string; selector: string; method: string }>;
   issues: ReviewIssue[];
   findings?: Array<{ id: string; figmaNodeId?: string }>;
@@ -16,7 +18,8 @@ export function evaluateDesignCoverage(input: {
   const matched = new Map(input.matches.filter(match =>
     match.method === "exact-id" || match.method === "stable-text" || match.method === "verified-template" || match.method === "verified-region")
     .map(match => [match.figmaNodeId, match.selector]));
-  const coverage: DesignCoverage = { policy: "design-driven", items: [] };
+  const actualDriven = input.policy === "actual-driven";
+  const coverage: DesignCoverage = { policy: input.policy ?? "design-driven", items: [] };
   const issues: ReviewIssue[] = [];
   const en = input.locale === "en";
   const samples = input.evidence.kind === "live" ? input.evidence.samples : [];
@@ -124,20 +127,21 @@ export function evaluateDesignCoverage(input: {
     const structuralOnly = !selector && hasMatchedDescendants && Object.keys(node.style).length === 0;
     const owner = selector ? undefined : inherited;
     const published = existing.find(issue => issue.rule === "missing_module" || issue.rule === "design_coverage_unverified");
-    const absence = !selector && !owner ? absenceEvidence(node) : undefined;
-    const missing = published?.rule === "missing_module" || Boolean(absence);
+    const absence = !actualDriven && !selector && !owner ? absenceEvidence(node) : undefined;
+    const missing = !actualDriven && (published?.rule === "missing_module" || Boolean(absence));
     const id = published?.id ?? `${missing ? "missing-module:coverage" : "coverage"}:${node.id}`;
     coverage.items.push({
       figmaNodeId: node.id, parentFigmaNodeId: originalParents.get(node.id) ?? parentId, name,
       nodeType: node.type, originalName: node.name, groupedParentFigmaNodeId: parentId,
       designBox: node.box,
       ...(absence ? { absenceEvidence: absence } : {}),
-      status: selector ? "matched" : structuralOnly ? "structural-only" : owner ? "covered-by-parent" : missing ? "missing" : "unverified",
-      reasonCode: selector ? "verified-binding" : structuralOnly ? "descendant-bindings" : owner ? "parent-finding" : missing ? "static-module-absent" : complete ? "correspondence-unresolved" : "scope-incomplete",
-      ...(selector ? { selector } : {}), ...(owner ? { coveredBy: owner } : {}),
-      issueIds: selector || structuralOnly ? existing.map(issue => issue.id) : [owner ?? id]
+      status: selector ? "matched" : actualDriven && !hasMatchedDescendants ? "outside-scope" : structuralOnly ? "structural-only" : owner ? "covered-by-parent" : missing ? "missing" : "unverified",
+      reasonCode: selector ? "verified-binding" : actualDriven && !hasMatchedDescendants ? "outside-actual-scope" : structuralOnly ? "descendant-bindings" : owner ? "parent-finding" : missing ? "static-module-absent" : complete ? "correspondence-unresolved" : "scope-incomplete",
+      ...(selector ? { selector } : {}), ...(!actualDriven && owner ? { coveredBy: owner } : {}),
+      issueIds: actualDriven ? existing.filter(issue => !["missing_module", "design_coverage_unverified", "region_displacement"].includes(issue.rule)).map(issue => issue.id) : selector || structuralOnly ? existing.map(issue => issue.id) : [owner ?? id],
+      ...(actualDriven && !selector ? { reviewStatus: "not-applicable" as const } : {})
     });
-    if (!selector && !owner && !structuralOnly && !published) {
+    if (!actualDriven && !selector && !owner && !structuralOnly && !published) {
       const title = missing ? (en ? `${name}: missing module` : `${name} 模块缺失`) : module && !hasMatchedDescendants
         ? (en ? `${name}: suspected missing module (verify)` : `${name} 模块疑似缺失（待核验）`)
         : (en ? `${name}: design coverage unverified` : `${name} 设计覆盖未能验证`);
@@ -162,9 +166,14 @@ export function evaluateDesignCoverage(input: {
   }
   reviewTree.children.forEach(node => visit(node, input.design.root.id));
   const actualElements = input.evidence.samples[input.evidence.canonicalSampleIndex]?.elements ?? [];
-  const boundSelectors = new Set(input.matches.map(match => match.selector));
+  const boundSelectors = new Set(matched.values());
   const actualBySelector = new Map(actualElements.map(element => [element.selector, element]));
-  const candidates = actualElements.filter(element => !boundSelectors.has(element.selector) &&
+  const viewport = input.evidence.viewport;
+  const layoutShell = (element: typeof actualElements[number]) => !element.text?.trim() &&
+    !/^(img|svg|canvas|video)$/i.test(element.tag) &&
+    (element.box.width >= viewport.width * 0.9 && element.box.height >= viewport.height * 0.8);
+  // Keep bounded cards for local grouping, but never publish a full-page shell.
+  const candidates = actualElements.filter(element => !boundSelectors.has(element.selector) && !layoutShell(element) &&
     (Boolean(element.text?.trim()) || /^(img|svg|canvas|video)$/i.test(element.tag) ||
       Boolean(element.style.backgroundColor && !/transparent|rgba\(0,\s*0,\s*0,\s*0\)/.test(element.style.backgroundColor)) || (element.style.borderWidth ?? 0) > 0));
   const candidateSelectors = new Set(candidates.map(element => element.selector));
@@ -178,13 +187,26 @@ export function evaluateDesignCoverage(input: {
       ancestor = actualBySelector.get(ancestor)?.parentSelector;
     }
     const id = `actual-coverage:${owner ?? element.selector}`;
-    const name = element.text?.trim().slice(0, 80) || element.role || element.tag;
+    const roleNames: Record<string, string> = { heading: "标题", button: "按钮", navigation: "导航", img: "图片", svg: "图标", canvas: "图形区域", video: "视频", table: "表格", columnheader: "表头" };
+    const descendantOf = (child: typeof element) => {
+      let ancestor = child.parentSelector;
+      const seen = new Set<string>();
+      while (ancestor && !seen.has(ancestor)) {
+        if (ancestor === element.selector) return true;
+        seen.add(ancestor); ancestor = actualBySelector.get(ancestor)?.parentSelector;
+      }
+      return false;
+    };
+    const heading = !element.text?.trim() && actualElements.find(child => boundSelectors.has(child.selector) &&
+      child.text?.trim() && child.text.trim().length <= 40 && descendantOf(child));
+    const name = element.text?.trim().slice(0, 80) || (heading ? heading.text!.trim() : undefined) ||
+      (en ? element.role || element.tag : roleNames[element.role ?? ""] || roleNames[element.tag] || "内容区域");
     if (!owner) {
       const summary = en ? "Visible actual content has no verified design counterpart; confirm its intended role." : "实际可见内容尚无设计对应，请核验其用途；不能仅凭未匹配判定多余。";
       const evidenceConfidence: EvidenceConfidence = { score: 0, level: "low", basis: [], reasons: [summary] };
       const action = en ? "Locate its design counterpart or confirm that this additional content is intended." : "查找对应设计，或确认该新增内容是否符合预期。";
       issues.push({ id, rule: "actual_coverage_unverified", category: en ? "Actual coverage" : "实际内容覆盖", severity: "pending", priority: "Pending",
-        title: `${name} · ${en ? "design counterpart unverified" : "无设计对应（待核验）"}`, summary, suggestion: action, primaryAction: action,
+        title: `${name} · ${en ? "content correspondence unverified" : "内容对应关系待核验"}`, summary, suggestion: action, primaryAction: action,
         selector: element.selector, actualBox: element.box, box: element.box, evidenceConfidence,
         location: { selector: element.selector, actualBox: element.box, description: name },
         evidence: [{ sourceIssueId: id, rule: "actual_coverage_unverified", category: "Actual coverage", summary, actualBox: element.box, evidenceConfidence }] });

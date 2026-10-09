@@ -25,7 +25,8 @@ export function buildStructureReportModel(input: {
   issues: ReviewIssue[];
   matching: ElementMatchingEvidence;
 }): StructureReportModel {
-  const evaluations = input.matching.missingModules?.candidates ?? [];
+  const actualDriven = input.matching.designCoverage?.policy === "actual-driven";
+  const evaluations = actualDriven ? [] : input.matching.missingModules?.candidates ?? [];
   const evaluationByFigmaNodeId = new Map(
     evaluations.map((evaluation) => [evaluation.figmaNodeId, evaluation])
   );
@@ -47,7 +48,7 @@ export function buildStructureReportModel(input: {
       };
     });
   const unpublished = evaluations.filter((evaluation) => !evaluation.published);
-  const unmatchedDesignCount = input.matching.unmatchedDesignCount;
+  const unmatchedDesignCount = actualDriven ? 0 : input.matching.unmatchedDesignCount;
   const agent = input.matching.semanticAgent;
   const incomplete = Boolean(agent?.invoked && (!agent.responded || agent.execution?.status === "failed"));
   const pendingModules = input.issues.filter(issue => issue.rule === "design_coverage_unverified" && Boolean(issue.coverageModule));
@@ -55,7 +56,7 @@ export function buildStructureReportModel(input: {
   return {
     visible: pendingModules.length > 0 || Boolean(input.matching.designCoverage) || incomplete || confirmed.length > 0 || unpublished.length > 0 || unmatchedDesignCount > 0,
     incomplete,
-    coverageIncomplete: pendingModules.length > 0 || Boolean(input.matching.designCoverage?.items.some(item => item.status === "unverified")),
+    coverageIncomplete: pendingModules.length > 0 || Boolean(input.matching.designCoverage?.items.some(item => item.status === "unverified" && item.reviewStatus !== "not-applicable")),
     pendingModules,
     confirmed,
     unpublished,

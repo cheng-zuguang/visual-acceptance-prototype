@@ -1,3 +1,4 @@
+import { actionableAdvicePriorities } from "./issue-presentation";
 import type { AiAdvice, PageAlignmentRegionDecision, ReviewIssue } from "./types";
 
 export function AiAdvicePriorities(props: {
@@ -11,8 +12,8 @@ export function AiAdvicePriorities(props: {
   const byRef = new Map(props.issues.map(issue => [`review-issue:${issue.id}`, issue]));
   const en = props.locale === "en";
   const locate = en ? "Locate issue" : "定位问题";
-  return <ol className="ai-priorities">{props.priorities.map((item, index) => {
-    const linked = item.evidenceRefs.map(ref => byRef.get(ref)).filter((issue): issue is ReviewIssue => Boolean(issue));
+  return <ol className="ai-priorities">{actionableAdvicePriorities(props.priorities, props.issues).map((item, index) => {
+    const linked = item.evidenceRefs.map(ref => byRef.get(ref)).filter((issue): issue is ReviewIssue => Boolean(issue) && issue?.rule !== "visual_similarity");
     const primary = linked.find(issue => issue.rule === "missing_module") ?? linked[0];
     const action = primary?.primaryAction ?? item.action;
     const selector = primary?.location.selector;

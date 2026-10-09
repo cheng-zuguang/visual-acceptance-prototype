@@ -6,10 +6,15 @@ import type {
   DesignTruth,
   DomElement,
   LiveActualEvidence,
-  StaticAudit
+  StaticAudit,
+  ReviewIssue
 } from "../src/types";
 import { compareDesignToPage as compareLiveEvidence } from "./compare";
 import { parseAcceptanceYaml } from "./default-rules";
+
+function hasRule(issue: ReviewIssue, rule: string): boolean {
+  return issue.rule === rule || issue.evidence.some(item => item.rule === rule);
+}
 
 async function solidPng(): Promise<Buffer> {
   return sharp({
@@ -33,12 +38,12 @@ test("accounts for every design item even when matching finds no actual counterp
     image, elements: [], audits: [], diagnostics: [], finalUrl: "https://example.test"
   }, parseAcceptanceYaml(""), "zh-CN");
   assert.deepEqual(result.matching.designCoverage?.items.map(item => item.figmaNodeId), ["card", "heading"]);
-  assert.equal(result.matching.designCoverage?.items[0].status, "unverified");
-  assert.ok(result.issues.some(issue => issue.rule === "design_coverage_unverified"));
-  assert.ok(!result.issues.some(issue => issue.rule === "missing_module"));
+  assert.equal(result.matching.designCoverage?.items[0].status, "outside-scope");
+  assert.ok(!result.issues.some(issue => hasRule(issue, "design_coverage_unverified")));
+  assert.ok(!result.issues.some(issue => hasRule(issue, "missing_module")));
 });
 
-test("publishes a static missing module without Agent or displacement when complete stable capture contains no counterpart", async () => {
+test("keeps design-only modules outside H5 scope even with complete static capture", async () => {
   const image = await solidPng();
   const box = { x: 1, y: 1, width: 10, height: 10 };
   const design = designTruth(image, [{
@@ -52,11 +57,10 @@ test("publishes a static missing module without Agent or displacement when compl
     fullDocument: true, elementLimitReached: false, opaqueContent: false, excludedContent: false
   } }));
   const result = await compareLiveEvidence(design, evidence, parseAcceptanceYaml(""), "zh-CN");
-  const missing = result.issues.filter(issue => issue.rule === "missing_module");
-  assert.equal(missing.length, 1);
-  assert.equal(missing[0].figmaNodeId, "policy");
-  assert.equal(result.matching.designCoverage?.items[0].status, "missing");
-  assert.deepEqual(result.matching.designCoverage?.items[1].issueIds, [missing[0].id]);
+  const missing = result.issues.filter(issue => hasRule(issue, "missing_module"));
+  assert.equal(missing.length, 0);
+  assert.equal(result.matching.designCoverage?.policy, "actual-driven");
+  assert.ok(result.matching.designCoverage?.items.every(item => item.reviewStatus === "not-applicable" && item.issueIds.length === 0));
   assert.equal(result.matching.semanticAgent?.invoked, false);
 });
 
@@ -236,7 +240,8 @@ async function dynamicMarketScenario(
             fontFamily: actualFontFamily,
             fontSize: actualFontSize,
             color: "rgb(0, 0, 0)",
-            textAlign: actualTextAlign
+            textAlign: actualTextAlign,
+            textBounds: {x: actualBox.x + (actualTextAlign === "right" ? actualBox.width - 20 : actualTextAlign === "center" ? (actualBox.width - 20) / 2 : 0), y: actualBox.y, width:20, height: actualBox.height}
           },
           fingerprint
         }
@@ -384,7 +389,7 @@ test("normalizes changing market-value characters after three stable samples", a
   );
 
   assert.equal(result.similarity, 1);
-  assert.equal(result.issues.some((issue) => issue.rule === "content"), false);
+  assert.equal(result.issues.some((issue) => hasRule(issue, "content")), false);
   assert.equal(result.dynamicNormalization.dynamicRegionAreaRatio, 0.16);
   assert.deepEqual(result.dynamicNormalization.regions.map((region) => ({
     kind: region.kind,
@@ -462,7 +467,7 @@ test("compares the actual market color with the mapped Figma Variant", async () 
     "zh-CN"
   );
 
-  const issue = result.issues.find((candidate) => candidate.rule === "market_variant_color");
+  const issue = result.issues.find((candidate) => hasRule(candidate, "market_variant_color"));
   assert.equal(issue?.expected, "#00aa00");
   assert.equal(issue?.actual, "#123456");
   assert.equal(issue?.figmaNodeId, "2:quote");
@@ -484,7 +489,7 @@ test("uses Figma Variant colors instead of assuming a red-up or green-down conve
   );
 
   assert.equal(result.marketVariants.matches[0].semantic, "market.down");
-  assert.equal(result.issues.some((issue) => issue.rule === "market_variant_color"), false);
+  assert.equal(result.issues.some((issue) => hasRule(issue, "market_variant_color")), false);
 });
 
 test("marks a signed market state pending when design-side Variant evidence is missing", async () => {
@@ -500,11 +505,11 @@ test("marks a signed market state pending when design-side Variant evidence is m
   );
 
   assert.equal(result.matching.designCoverage!.items.find(item => item.figmaNodeId === "2:quote")!.checks!.find(check => check.property === "color")?.status, "pending");
-  assert.ok(!result.issues.some(issue => issue.rule === "color" && issue.figmaNodeId === "2:quote"));
+  assert.ok(!result.issues.some(issue => hasRule(issue, "color") && issue.figmaNodeId === "2:quote"));
   assert.equal(result.marketVariants.matches.length, 0);
   assert.equal(result.marketVariants.unresolved.length, 1);
   assert.equal(result.issues.some((issue) =>
-    issue.rule === "market_variant" && issue.severity === "pending"
+    hasRule(issue, "market_variant") && issue.severity === "pending"
   ), true);
 });
 
@@ -523,10 +528,10 @@ test("reports target Variant icon position and size differences", async () => {
   );
 
   assert.equal(result.issues.some((issue) =>
-    issue.rule === "market_variant_icon_position"
+    hasRule(issue, "market_variant_icon_position")
   ), true);
   assert.equal(result.issues.some((issue) =>
-    issue.rule === "market_variant_icon_size"
+    hasRule(issue, "market_variant_icon_size")
   ), true);
 });
 
@@ -544,7 +549,7 @@ test("reports a missing icon required by the mapped Figma Variant", async () => 
   );
 
   assert.equal(result.issues.some((issue) =>
-    issue.rule === "market_variant_icon"
+    hasRule(issue, "market_variant_icon")
   ), true);
 });
 
@@ -583,7 +588,7 @@ test("verifies one bounded AgentHypothesis before normalizing an ambiguous dynam
   assert.equal(result.dynamicNormalization.regions.length, 1);
   assert.equal(result.dynamicNormalization.regions[0].source, "agent-verified");
   assert.equal(result.dynamicNormalization.regions[0].evidenceConfidence.score, 0.9);
-  assert.equal(result.issues.some((issue) => issue.rule === "content"), false);
+  assert.equal(result.issues.some((issue) => hasRule(issue, "content")), false);
 });
 
 test("normalizes an Agent-classified countdown while retaining its typography defect", async () => {
@@ -613,8 +618,8 @@ test("normalizes an Agent-classified countdown while retaining its typography de
 
   assert.equal(result.dynamicNormalization.regions[0]?.kind, "countdown");
   assert.equal(result.dynamicNormalization.regions[0]?.strategy, "normalize-countdown-text");
-  assert.equal(result.issues.some((issue) => issue.rule === "content"), false);
-  assert.equal(result.issues.some((issue) => issue.rule === "typography"), true);
+  assert.equal(result.issues.some((issue) => hasRule(issue, "content")), false);
+  assert.equal(result.issues.some((issue) => hasRule(issue, "typography")), true);
 });
 
 test("uses DesignTruth semantics instead of treating every changing number as a market value", async () => {
@@ -776,7 +781,7 @@ test("normalizes a countdown after AI visual-semantic binding", async () => {
   assert.equal(dynamicRequests, 1);
   assert.equal(result.matching.matches[0]?.method, "visual-inference");
   assert.equal(result.dynamicNormalization.regions[0]?.kind, "countdown");
-  assert.equal(result.issues.some((issue) => issue.rule === "content"), false);
+  assert.equal(result.issues.some((issue) => hasRule(issue, "content")), false);
 });
 
 test("normalizes an Agent-classified date that stays stable during capture", async () => {
@@ -805,7 +810,7 @@ test("normalizes an Agent-classified date that stays stable during capture", asy
   );
 
   assert.equal(result.dynamicNormalization.regions[0]?.kind, "date-time");
-  assert.equal(result.issues.some((issue) => issue.rule === "content"), false);
+  assert.equal(result.issues.some((issue) => hasRule(issue, "content")), false);
 });
 
 test("does not ask the Agent to classify an unsupported static copy difference", async () => {
@@ -838,7 +843,7 @@ test("does not ask the Agent to classify an unsupported static copy difference",
   );
 
   assert.equal(result.dynamicNormalization.regions.length, 0);
-  assert.equal(result.issues.some((issue) => issue.rule === "content"), true);
+  assert.equal(result.issues.some((issue) => hasRule(issue, "content")), true);
   assert.equal(requests, 0);
 });
 
@@ -868,7 +873,7 @@ test("keeps a content issue when the Agent labels arbitrary changing text as a m
   );
 
   assert.equal(result.dynamicNormalization.regions.length, 0);
-  assert.equal(result.issues.some((issue) => issue.rule === "content"), true);
+  assert.equal(result.issues.some((issue) => hasRule(issue, "content")), true);
 });
 
 test("normalizes a verified probability without hiding its layout checks", async () => {
@@ -901,8 +906,9 @@ test("normalizes a verified probability without hiding its layout checks", async
   );
 
   assert.equal(result.dynamicNormalization.regions[0]?.kind, "probability");
-  assert.equal(result.issues.some((issue) => issue.rule === "content"), false);
-  assert.equal(result.issues.some((issue) => issue.rule === "position"), true);
+  assert.equal(result.issues.some((issue) => hasRule(issue, "content")), false);
+  assert.equal(result.issues.some((issue) => hasRule(issue, "position")), false);
+  assert.ok(result.matching.designCoverage?.items.some(item => item.checks?.some(check => check.rule === "position" && check.status === "pending")));
 });
 
 test("normalizes a verified market-rate range", async () => {
@@ -931,7 +937,7 @@ test("normalizes a verified market-rate range", async () => {
   );
 
   assert.equal(result.dynamicNormalization.regions[0]?.kind, "market-value");
-  assert.equal(result.issues.some((issue) => issue.rule === "content"), false);
+  assert.equal(result.issues.some((issue) => hasRule(issue, "content")), false);
 });
 
 test("allows exactly one correction when deterministic verification rejects the first hypothesis", async () => {
@@ -1005,7 +1011,7 @@ test("marks an ambiguous region pending after the corrected hypothesis still fai
   assert.equal(result.dynamicNormalization.agentHypotheses[0].status, "pending");
   assert.equal(result.dynamicNormalization.agentHypotheses[0].attempts, 2);
   assert.equal(result.issues.some((issue) =>
-    issue.rule === "dynamic_hypothesis" && issue.severity === "pending"
+    hasRule(issue, "dynamic_hypothesis")
   ), true);
 });
 
@@ -1032,7 +1038,7 @@ test("keeps the deterministic report and marks the region pending when the Agent
   assert.equal(result.dynamicNormalization.agentHypotheses[0].attempts, 1);
   assert.match(result.dynamicNormalization.agentHypotheses[0].reason, /agent timeout/);
   assert.equal(result.issues.some((issue) =>
-    issue.rule === "dynamic_hypothesis" && issue.severity === "pending"
+    hasRule(issue, "dynamic_hypothesis")
   ), true);
 });
 
@@ -1059,7 +1065,7 @@ test("rejects an invalid AgentHypothesis schema without a correction call", asyn
   assert.equal(attempts, 1);
   assert.equal(result.dynamicNormalization.agentHypotheses[0].status, "pending");
   assert.match(result.dynamicNormalization.agentHypotheses[0].reason, /Schema/);
-  assert.equal(result.issues.some((issue) => issue.rule === "dynamic_hypothesis"), true);
+  assert.equal(result.issues.some((issue) => hasRule(issue, "dynamic_hypothesis")), true);
 });
 
 test("does not normalize a changing value supported by only two samples", async () => {
@@ -1072,7 +1078,7 @@ test("does not normalize a changing value supported by only two samples", async 
   );
 
   assert.equal(result.dynamicNormalization.regions.length, 0);
-  assert.equal(result.issues.some((issue) => issue.rule === "content"), true);
+  assert.equal(result.issues.some((issue) => hasRule(issue, "content")), true);
   assert.ok(result.similarity < 1);
 });
 
@@ -1089,9 +1095,9 @@ test("still reports an incorrect font size on a normalized market value", async 
   );
 
   assert.equal(result.dynamicNormalization.regions.length, 1);
-  assert.equal(result.issues.some((issue) => issue.rule === "content"), false);
+  assert.equal(result.issues.some((issue) => hasRule(issue, "content")), false);
   assert.equal(result.issues.some((issue) =>
-    issue.rule === "typography" && issue.summary.includes("font-size")
+    hasRule(issue, "typography") && issue.evidence.some(item => item.rule === "typography" && item.summary.includes("font-size"))
   ), true);
 });
 
@@ -1109,7 +1115,7 @@ test("still reports an incorrect font family on a normalized market value", asyn
 
   assert.equal(result.dynamicNormalization.regions.length, 1);
   assert.equal(result.issues.some((issue) =>
-    issue.rule === "typography" && issue.summary.includes("font-family")
+    hasRule(issue, "typography") && issue.evidence.some(item => item.rule === "typography" && item.summary.includes("font-family"))
   ), true);
 });
 
@@ -1129,7 +1135,7 @@ test("treats compact and spaced PingFang SC names as the same font family", asyn
   );
 
   assert.equal(result.issues.some((issue) =>
-    issue.rule === "typography" && issue.summary.includes("font-family")
+    hasRule(issue, "typography") && issue.evidence.some(item => item.rule === "typography" && item.summary.includes("font-family"))
   ), false);
 });
 
@@ -1147,7 +1153,7 @@ test("still reports incorrect text alignment on a normalized market value", asyn
 
   assert.equal(result.dynamicNormalization.regions.length, 1);
   assert.equal(result.issues.some((issue) =>
-    issue.rule === "alignment" && issue.actual === "left"
+    hasRule(issue, "alignment") && issue.actual === "偏离目标对齐"
   ), true);
 });
 
@@ -1163,10 +1169,10 @@ test("treats start and left as equivalent text alignment on an LTR page", async 
     "zh-CN"
   );
 
-  assert.equal(result.issues.some((issue) => issue.rule === "alignment"), false);
+  assert.equal(result.issues.some((issue) => hasRule(issue, "alignment")), false);
 });
 
-test("still reports a position offset on a normalized market value", async () => {
+test("keeps normalized market positioning pending without a local reference", async () => {
   const { truth, evidence } = await dynamicMarketScenario(
     ["101.00", "102.00", "103.00"],
     { actualBox: { x: 12, y: 8, width: 40, height: 16 } }
@@ -1179,11 +1185,10 @@ test("still reports a position offset on a normalized market value", async () =>
   );
 
   assert.equal(result.dynamicNormalization.regions.length, 1);
-  assert.equal(result.issues.some((issue) => issue.rule === "content"), false);
-  const position = result.issues.find((issue) => issue.rule === "position");
-  assert.ok(position);
-  assert.equal(position.actualElementFingerprint, "figma:2:price");
-  assert.equal(position.dynamicStrategy, "normalize-market-value-text");
+  assert.equal(result.issues.some((issue) => hasRule(issue, "content")), false);
+  assert.equal(result.issues.some(issue => hasRule(issue, "position")), false);
+  assert.ok(result.matching.designCoverage?.items.some(item => item.checks?.some(check => check.rule === "position" && check.status === "pending")));
+
 });
 
 test("still reports clipped overflow for a normalized long market value", async () => {
@@ -1208,9 +1213,9 @@ test("still reports clipped overflow for a normalized long market value", async 
   );
 
   assert.equal(result.dynamicNormalization.regions.length, 1);
-  assert.equal(result.issues.some((issue) => issue.rule === "content"), false);
+  assert.equal(result.issues.some((issue) => hasRule(issue, "content")), false);
   assert.equal(result.issues.some((issue) =>
-    issue.rule === "clipped_text" && issue.selector === "#price"
+    hasRule(issue, "clipped_text") && issue.selector === "#price"
   ), true);
 });
 
@@ -1257,7 +1262,7 @@ test("does not hide an adjacent static text error", async () => {
 
   assert.equal(result.dynamicNormalization.regions.length, 1);
   assert.equal(result.issues.some((issue) =>
-    issue.rule === "content" && issue.figmaNodeId === "2:label"
+    hasRule(issue, "content") && issue.figmaNodeId === "2:label"
   ), true);
 });
 
@@ -1273,7 +1278,7 @@ test("normalizes a verified market field even without temporal change", async ()
   );
 
   assert.equal(result.dynamicNormalization.regions.length, 1);
-  assert.equal(result.issues.some((issue) => issue.rule === "content"), false);
+  assert.equal(result.issues.some((issue) => hasRule(issue, "content")), false);
 });
 
 test("normalizes a black-box market value without data-figma-id", async () => {
@@ -1325,7 +1330,7 @@ test("accepts percentage and compound volume formats as market evidence", async 
       "zh-CN"
     );
     assert.equal(result.dynamicNormalization.regions.length, 1);
-    assert.equal(result.issues.some((issue) => issue.rule === "content"), false);
+    assert.equal(result.issues.some((issue) => hasRule(issue, "content")), false);
   }
 });
 
@@ -1343,7 +1348,7 @@ test("rejects normalization when geometry or style changes across samples", asyn
     );
 
     assert.equal(result.dynamicNormalization.regions.length, 0);
-    assert.equal(result.issues.some((issue) => issue.rule === "content"), true);
+    assert.equal(result.issues.some((issue) => hasRule(issue, "content")), true);
   }
 });
 
@@ -1606,7 +1611,7 @@ test("distinguishes stable-text evidence from structure-geometry evidence", asyn
   assert.deepEqual(geometryMatch?.evidenceConfidence.basis, ["structure-geometry"]);
 });
 
-test("preserves separate design and actual evidence boxes for a shifted matched element", async () => {
+test("preserves actual evidence boxes while unreferenced position remains pending", async () => {
   const image = await solidPng();
   const truth = designTruth(image, [{
     id: "2:rate-range",
@@ -1638,9 +1643,12 @@ test("preserves separate design and actual evidence boxes for a shifted matched 
     "zh-CN"
   );
 
-  const issue = result.issues.find((candidate) => candidate.rule === "position");
-  assert.deepEqual(issue?.location.designBox, { x: 1, y: 10, width: 8, height: 2 });
-  assert.deepEqual(issue?.location.actualBox, { x: 1, y: 2, width: 8, height: 2 });
+  assert.equal(result.issues.some(candidate => hasRule(candidate, "position")), false);
+
+  assert.ok(result.matching.designCoverage?.items.some(item => item.checks?.some(check => check.rule === "position" && check.status === "pending")));
+  const check = result.matching.designCoverage?.items.flatMap(item => item.checks ?? []).find(check => check.rule === "position");
+  assert.deepEqual(check?.actualBox, {x:1,y:2,width:8,height:2});
+
 });
 
 test("keeps a medium-confidence geometric candidate pending without size repair advice", async () => {
@@ -1678,14 +1686,15 @@ test("keeps a medium-confidence geometric candidate pending without size repair 
     "zh-CN"
   );
 
-  const sizeIssue = result.issues.find((issue) => issue.rule === "size");
+  const sizeIssue = result.issues.find((issue) => hasRule(issue, "size"));
   const match = result.matching.matches[0];
   assert.equal(match.evidenceConfidence.level, "medium");
   assert.equal(sizeIssue, undefined);
-  assert.ok(result.issues.some(issue => issue.rule === "design_coverage_unverified" && issue.severity === "pending"));
+  assert.ok(result.matching.matches.some(match => match.method === "structure-geometry"));
+  assert.ok(result.matching.designCoverage?.items.every(item => item.reviewStatus === "not-applicable"));
 });
 
-test("caps a visual-only region inference at low confidence and pending severity", async () => {
+test("leaves uncorresponded image differences outside the acceptance pixel gate", async () => {
   const reference = await solidPng();
   const actual = await sharp({
     create: {
@@ -1709,14 +1718,10 @@ test("caps a visual-only region inference at low confidence and pending severity
     "zh-CN"
   );
 
-  const visualRegion = result.issues.find((issue) => issue.rule === "visual_region");
-  assert.equal(visualRegion?.severity, "pending");
-  assert.deepEqual(visualRegion?.evidenceConfidence, {
-    score: 0.7,
-    level: "low",
-    basis: ["pixel-measurement", "visual-inference"],
-    reasons: ["仅由单帧像素差异定位区域，缺少元素身份或结构佐证。"]
-  });
+  assert.equal(result.issues.some(issue => hasRule(issue,"visual_similarity") || hasRule(issue,"visual_region")),false);
+  assert.equal(result.matching.visualScope?.reviewedPixels,0);
+  assert.equal(result.matching.visualScope?.changedPixels,0);
+
 });
 
 test("attaches reproducible EvidenceConfidence to every deterministic finding", async () => {
@@ -1770,11 +1775,11 @@ test("attaches reproducible EvidenceConfidence to every deterministic finding", 
 
   assert.equal(result.issues.every((issue) => Boolean(issue.evidenceConfidence)), true);
   assert.deepEqual(
-    result.issues.find((issue) => issue.rule === "visual_similarity")?.evidenceConfidence?.basis,
+    result.issues.find((issue) => hasRule(issue, "visual_similarity"))?.evidenceConfidence?.basis,
     ["pixel-measurement"]
   );
   assert.deepEqual(
-    result.issues.find((issue) => issue.rule === "horizontal_overflow")?.evidenceConfidence?.basis,
+    result.issues.find((issue) => hasRule(issue, "horizontal_overflow"))?.evidenceConfidence?.basis,
     ["dom-audit"]
   );
 });
@@ -1814,9 +1819,10 @@ test("keeps unverified geometry pending even when color is configured as a warni
     "zh-CN"
   );
 
-  const colorIssue = result.issues.find((issue) => issue.rule === "color");
+  const colorIssue = result.issues.find((issue) => hasRule(issue, "color"));
   assert.equal(colorIssue, undefined);
-  assert.ok(result.issues.some(issue => issue.rule === "design_coverage_unverified" && issue.severity === "pending"));
+  assert.ok(result.matching.matches.some(match => match.method === "structure-geometry"));
+  assert.ok(result.matching.designCoverage?.items.every(item => item.reviewStatus === "not-applicable"));
 });
 
 test("excludes a stable-text candidate below the configured match threshold", async () => {
@@ -1857,7 +1863,7 @@ test("excludes a stable-text candidate below the configured match threshold", as
   );
 
   assert.equal(result.matching.matches.length, 0);
-  assert.equal(result.issues.some((issue) => issue.rule === "position"), false);
+  assert.equal(result.issues.some((issue) => hasRule(issue, "position")), false);
   assert.equal(result.matching.unmatchedDesignCount, 1);
   assert.equal(result.matching.unmatchedActualCount, 1);
 });
@@ -1907,7 +1913,7 @@ test("excludes unmatched pixels from the deterministic similarity gate", async (
 
   assert.equal(result.matching.matches.length, 0);
   assert.equal(result.similarity, 1);
-  assert.equal(result.issues.some((issue) => issue.rule === "visual_similarity"), false);
+  assert.equal(result.issues.some((issue) => hasRule(issue, "visual_similarity")), false);
 });
 
 test("uses AI visual-semantic binding for ambiguous elements and verifies the proposal deterministically", async () => {
@@ -2060,7 +2066,7 @@ test("keeps semantically different text unmatched when the Agent abstains", asyn
 
   assert.equal(calls, 1);
   assert.equal(result.matching.matches.length, 0);
-  assert.equal(result.issues.some((issue) => issue.rule === "content"), false);
+  assert.equal(result.issues.some((issue) => hasRule(issue, "content")), false);
 });
 
 test("does not override Agent abstention with a numeric geometry match", async () => {
@@ -3425,7 +3431,7 @@ test("removes an Agent module displacement when verified bindings have no majori
   assert.match(region?.reason ?? "", /已验证元素锚点位移无多数共识/);
 });
 
-test("aggregates shared element displacement into one module-level root cause", async () => {
+test("retains shared displacement diagnostics without publishing absolute position findings", async () => {
   const image = await solidPng();
   const truth = designTruth(image, [{
     id: "2:observation",
@@ -3513,14 +3519,10 @@ test("aggregates shared element displacement into one module-level root cause", 
     parseAcceptanceYaml(),
     "zh-CN"
   );
-  const positionIssues = result.issues.filter((candidate) => candidate.rule === "position");
+  const positionIssues = result.issues.filter((candidate) => hasRule(candidate, "position"));
 
-  assert.equal(positionIssues.length, 1);
-  assert.equal(positionIssues[0].figmaNodeId, "2:observation");
-  assert.equal(positionIssues[0].selector, ".rate-observation");
-  assert.match(positionIssues[0].title, /利率观察.*模块整体位移/);
-  assert.equal(positionIssues[0].location.description, "页面模块 利率观察");
-  assert.equal(positionIssues[0].evidence.length, 3);
+  assert.equal(positionIssues.length, 0);
+  assert.ok(result.matching.pageAlignment.regions.some(region => region.displacement?.y === 5));
 
   const stricterResult = await compareLiveEvidence(
     truth,
@@ -3536,12 +3538,12 @@ page_alignment:
     "zh-CN"
   );
   assert.equal(
-    stricterResult.issues.find((candidate) => candidate.rule === "position")?.severity,
-    "pending"
+    stricterResult.issues.find((candidate) => hasRule(candidate, "position"))?.severity,
+    undefined
   );
 });
 
-test("aggregates a deterministic Figma module across separate DOM branches when AI is unavailable", async () => {
+test("keeps cross-branch displacement diagnostic when local adjacency is unverified", async () => {
   const image = await solidPng();
   const truth = designTruth(image, [{
     id: "2:observation",
@@ -3624,15 +3626,14 @@ test("aggregates a deterministic Figma module across separate DOM branches when 
   const moduleRegion = result.matching.pageAlignment.regions.find(
     (region) => region.designParentFigmaNodeId === "2:observation"
   );
-  const positionIssues = result.issues.filter((candidate) => candidate.rule === "position");
+  const positionIssues = result.issues.filter((candidate) => hasRule(candidate, "position"));
 
   assert.deepEqual(moduleRegion?.displacement, { x: 0, y: 5 });
   assert.equal(moduleRegion?.source, "deterministic");
   assert.equal(moduleRegion?.actualParentSelector, undefined);
-  assert.equal(positionIssues.length, 1);
-  assert.equal(positionIssues[0].figmaNodeId, "2:observation");
-  assert.equal(positionIssues[0].selector, undefined);
-  assert.equal(positionIssues[0].evidence.length, 2);
+  assert.equal(positionIssues.length, 0);
+  assert.ok(result.matching.designCoverage?.items.some(item => item.checks?.some(check => check.rule === "position" && check.status === "pending")));
+
 });
 
 test("uses a structured missing-region decision to suppress descendant matches", async () => {
@@ -3696,7 +3697,7 @@ test("uses a structured missing-region decision to suppress descendant matches",
 
   assert.equal(result.matching.matches.length, 0);
   assert.equal(
-    result.issues.some((issue) => issue.rule === "missing_module"),
+    result.issues.some((issue) => hasRule(issue, "missing_module")),
     false
   );
   assert.deepEqual(
@@ -3713,7 +3714,7 @@ test("uses a structured missing-region decision to suppress descendant matches",
   );
 });
 
-test("publishes a verified missing-module ReviewIssue from page alignment and neighboring anchors", async () => {
+test("retains verified missing-module calibration evidence without publishing H5 scope omissions", async () => {
   const image = await sharp({
     create: {
       width: 100,
@@ -3848,12 +3849,10 @@ test("publishes a verified missing-module ReviewIssue from page alignment and ne
     }
   );
 
-  const missingIssue = result.issues.find((issue) => issue.rule === "missing_module");
+  const missingIssue = result.issues.find((issue) => hasRule(issue, "missing_module"));
   assert.equal(result.matching.unmatchedActualCount, 0);
-  assert.ok(missingIssue);
-  assert.equal(missingIssue.figmaNodeId, "2:missing");
-  assert.equal(missingIssue.priority, "P1");
-  assert.match(missingIssue.summary, /20px/);
+  assert.equal(missingIssue, undefined);
+  assert.equal(result.matching.designCoverage?.items.find(item => item.figmaNodeId === "2:missing")?.reviewStatus, "not-applicable");
   assert.deepEqual(result.matching.missingModules, {
     evaluatedCount: 1,
     publishedCount: 1,
@@ -4075,10 +4074,10 @@ test(`uses temporally stable ${side} structure as a missing-module anchor`, asyn
     }
   );
 
-  const missingIssue = result.issues.find((candidate) => candidate.rule === "missing_module");
+  const missingIssue = result.issues.find((candidate) => hasRule(candidate, "missing_module"));
   const missingEvaluation = result.matching.missingModules?.candidates[0];
   assert.equal(result.matching.missingModules?.evaluatedCount, 1);
-  assert.ok(missingIssue);
+  assert.equal(missingIssue, undefined);
   assert.equal(missingEvaluation?.followingRegionId, "2:after");
   assert.equal(missingEvaluation?.designFlowGapPx, 20);
   assert.equal(missingEvaluation?.displacementStepPx, 20);
@@ -4135,8 +4134,8 @@ test(`reviews date slots only with verified container identity (${bound}, wrappe
   }
   const result = await compareLiveEvidence(truth, evidence, parseAcceptanceYaml(), "zh-CN");
   assert.equal(result.matching.matches.filter(m => m.figmaNodeId.startsWith("date:")).length, bound ? 2 : 0);
-  assert.equal(result.issues.some(i => i.rule === "typography" && i.figmaNodeId === "date:0"), bound);
-  if (bound && wrapped) assert.ok(result.issues.some(i => i.rule === "decoration" && i.figmaNodeId === "option:0"));
+  assert.equal(result.issues.some(i => hasRule(i, "typography") && i.figmaNodeId === "date:0"), bound);
+  if (bound && wrapped) assert.ok(result.issues.some(i => hasRule(i, "decoration") && i.figmaNodeId === "option:0"));
 });
 }
 }
@@ -4148,7 +4147,7 @@ test("reports a newly introduced one-pixel border on an identified date selector
   const evidence = liveEvidence({image, audits: [], diagnostics: [], finalUrl: "https://example.test/dates",
     elements: [{selector: ".dates", tag: "nav", dataFigmaId: "dates", box, style: {borderWidth: 1}}]});
   const result = await compareLiveEvidence(truth, evidence, parseAcceptanceYaml(), "zh-CN");
-  assert.ok(result.issues.some(issue => issue.rule === "decoration" && issue.figmaNodeId === "dates"));
+  assert.ok(result.issues.some(issue => hasRule(issue, "decoration") && issue.figmaNodeId === "dates"));
 });
 
 test("supplies structural module ids and descendant headings even when plain groups are not element candidates", async () => {
@@ -4627,4 +4626,101 @@ test("gives AI one correction round after deterministic element-binding rejectio
   assert.equal(calls, 2);
   assert.equal(result.matching.matches.length, 1);
   assert.match(result.matching.diagnostics.join("\n"), /接受 1 项；经过 2 轮，确定性复核拒绝 1 项/);
+});
+
+test("reviews local sibling spacing without reporting common page displacement", async () => {
+  const image = await sharp({create:{width:100,height:100,channels:4,background:"white"}}).png().toBuffer();
+  const truth = designTruth(image,[{id:"card",parentId:"1:2",name:"卡片",type:"GROUP",box:{x:0,y:0,width:100,height:100},style:{},children:[
+    {id:"a",parentId:"card",name:"标题",type:"TEXT",text:"标题",box:{x:10,y:10,width:40,height:10},style:{},children:[]},
+    {id:"b",parentId:"card",name:"说明",type:"TEXT",text:"说明",box:{x:10,y:40,width:40,height:10},style:{},children:[]}
+  ]}]);
+  truth.render.viewport = {width:100,height:100}; truth.root.box = {x:0,y:0,width:100,height:100};
+  const actual = liveEvidence({image,elements:[
+    {selector:".card",dataFigmaId:"card",tag:"section",box:{x:0,y:100,width:100,height:100},style:{}},
+    {selector:".a",parentSelector:".card",dataFigmaId:"a",tag:"p",text:"标题",box:{x:10,y:110,width:40,height:10},style:{}},
+    {selector:".b",parentSelector:".card",dataFigmaId:"b",tag:"p",text:"说明",box:{x:10,y:140,width:40,height:10},style:{}}
+  ],audits:[],diagnostics:[],finalUrl:"https://example.test"});
+  const equal = await compareLiveEvidence(truth,actual,parseAcceptanceYaml(),"zh-CN");
+  assert.equal(equal.issues.some(issue => hasRule(issue,"position") || hasRule(issue,"region_displacement")),false);
+  actual.samples[0].elements[2].box.y += 8;
+  const changed = await compareLiveEvidence(truth,actual,parseAcceptanceYaml(),"zh-CN");
+  assert.ok(changed.issues.some(issue => hasRule(issue,"position") && issue.evidence.some(evidence => evidence.summary.includes("8px"))));
+  assert.ok(changed.matching.designCoverage?.items.find(item => item.figmaNodeId === "b")?.checks?.some(check => check.rule === "position" && check.status === "difference"));
+});
+
+test("local pixel evidence compares translated content and excludes design-only modules", async () => {
+  const render = (y: number, extra: boolean) => sharp(Buffer.from(`<svg width="100" height="100" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="100" fill="white"/><rect x="10" y="${y}" width="20" height="10" fill="black"/>${extra ? '<rect x="60" y="10" width="30" height="80" fill="red"/>' : ''}</svg>`)).png().toBuffer();
+  const reference = await render(10,true), actualImage = await render(40,false);
+  const truth = designTruth(reference,[
+    {id:"icon",parentId:"1:2",name:"图标",type:"RECTANGLE",box:{x:10,y:10,width:20,height:10},style:{backgroundColor:"black"},children:[]},
+    {id:"extra",parentId:"1:2",name:"设计额外模块",type:"RECTANGLE",box:{x:60,y:10,width:30,height:80},style:{backgroundColor:"red"},children:[]}
+  ]);
+  truth.render.viewport = {width:100,height:100}; truth.root.box = {x:0,y:0,width:100,height:100};
+  const result = await compareLiveEvidence(truth,liveEvidence({image:actualImage,elements:[
+    {selector:".icon",dataFigmaId:"icon",tag:"div",box:{x:10,y:40,width:20,height:10},style:{backgroundColor:"black"}}
+  ],audits:[],diagnostics:[],finalUrl:"https://example.test"}),parseAcceptanceYaml(),"zh-CN");
+  assert.equal(result.similarity,1);
+  assert.equal(result.matching.visualScope?.reviewedPixels,200);
+  assert.equal(result.matching.visualScope?.changedPixels,0);
+  assert.equal(result.issues.some(issue => hasRule(issue,"visual_similarity") || hasRule(issue,"missing_module") || hasRule(issue,"position")),false);
+});
+
+test("maps a single text child to verified parent flex alignment using rendered bounds", async () => {
+  const image = await sharp({create:{width:100,height:100,channels:4,background:"white"}}).png().toBuffer();
+  const truth = designTruth(image,[{id:"cell",parentId:"1:2",name:"单元格",type:"GROUP",box:{x:0,y:0,width:100,height:30},style:{},layout:{paddingRight:10},children:[
+    {id:"label",parentId:"cell",name:"文字",type:"TEXT",text:"标签",box:{x:60,y:0,width:30,height:10},style:{textAlign:"right"},children:[]}
+  ]}]);
+  truth.render.viewport = {width:100,height:100}; truth.root.box={x:0,y:0,width:100,height:100};
+  const actual=liveEvidence({image,elements:[
+    {selector:".cell",dataFigmaId:"cell",tag:"div",box:{x:0,y:0,width:100,height:30},style:{display:"flex",justifyContent:"flex-end",paddingRight:10}},
+    {selector:".label",parentSelector:".cell",dataFigmaId:"label",tag:"span",text:"标签",box:{x:60,y:0,width:30,height:10},style:{display:"inline",textAlign:"start",textBounds:{x:60,y:0,width:30,height:10}}}
+  ],audits:[],diagnostics:[],finalUrl:"https://example.test"});
+  const equal = await compareLiveEvidence(truth,actual,parseAcceptanceYaml(),"zh-CN");
+  assert.equal(equal.issues.some(issue => hasRule(issue,"alignment")),false);
+  actual.samples[0].elements[1].style.textBounds!.x=10;
+  const mismatch = await compareLiveEvidence(truth,actual,parseAcceptanceYaml(),"zh-CN");
+  assert.ok(mismatch.issues.some(issue => hasRule(issue,"alignment")));
+});
+
+test("does not reject a snug probability label whose rendered position agrees despite different text-align values", async () => {
+  const image = await solidPng();
+  const box = {x: 2, y: 2, width: 10, height: 8};
+  const truth = designTruth(image, [{id: "probability", name: "概率", type: "TEXT", text: "概率", box, style: {textAlign: "right"}, children: []}]);
+  const result = await compareDesignToPage(truth, {image, elements: [{selector: ".probability", dataFigmaId: "probability", tag: "span", text: "概率", box, style: {display: "inline", textAlign: "left", textBounds: box}}], audits: [], diagnostics: [], finalUrl: "https://example.test"}, parseAcceptanceYaml(), "zh-CN");
+  assert.equal(result.issues.some(issue => hasRule(issue, "alignment")), false);
+});
+
+test("does not treat a snug Figma text alignment as the alignment of a wider H5 button", async () => {
+  const image = await sharp({create:{width:100,height:30,channels:4,background:"white"}}).png().toBuffer();
+  const textBox = {x:30,y:5,width:40,height:20};
+  const truth = designTruth(image,[{id:"expand",name:"展开更多",type:"TEXT",text:"展开更多",box:textBox,style:{textAlign:"justified"},children:[]}]);
+  truth.render.viewport={width:100,height:30}; truth.root.box={x:0,y:0,width:100,height:30};
+  const result = await compareDesignToPage(truth,{image,elements:[{selector:".expand",dataFigmaId:"expand",tag:"button",text:"展开更多",box:{x:0,y:0,width:100,height:30},style:{display:"block",textAlign:"left",textBounds:textBox}}],audits:[],diagnostics:[],finalUrl:"https://example.test"},parseAcceptanceYaml(),"zh-CN");
+  assert.equal(result.issues.some(issue => hasRule(issue,"alignment")),false);
+});
+
+test("static rendered alignment differences do not claim dynamic normalization", async () => {
+  const image=await solidPng(); const box={x:1,y:1,width:14,height:10};
+  const truth=designTruth(image,[{id:"label",name:"标题",type:"TEXT",text:"标题",box,style:{textAlign:"right"},children:[]}]);
+  const result=await compareDesignToPage(truth,{image,elements:[{selector:".label",dataFigmaId:"label",tag:"p",text:"标题",box,style:{textAlign:"left",textBounds:{x:1,y:1,width:3,height:10}}}],audits:[],diagnostics:[],finalUrl:"https://example.test"},parseAcceptanceYaml(),"zh-CN");
+  const issue=result.issues.find(issue=>hasRule(issue,"alignment"));
+  assert.ok(issue); assert.equal(result.dynamicNormalization.regions.length,0);
+  assert.doesNotMatch(issue.summary,/动态|归一化/);
+});
+
+test("alignment without rendered text evidence stays unverified instead of blocking acceptance on CSS alone", async () => {
+  const image=await solidPng();const box={x:1,y:1,width:14,height:10};
+  const truth=designTruth(image,[{id:"label",name:"标题",type:"TEXT",text:"标题",box,style:{textAlign:"right"},children:[]}]);
+  const result=await compareDesignToPage(truth,{image,elements:[{selector:".label",dataFigmaId:"label",tag:"p",text:"标题",box,style:{textAlign:"left"}}],audits:[],diagnostics:[],finalUrl:"https://example.test"},parseAcceptanceYaml(),"zh-CN");
+  assert.equal(result.issues.some(issue=>hasRule(issue,"alignment") && issue.severity==="error"),false);
+  const item=result.matching.designCoverage?.items.find(item=>item.figmaNodeId==="label");
+  assert.ok(item?.checks?.some(check=>check.property==="textAlign" && check.status==="pending"));
+});
+
+test("published typography advice names the confirmed difference and changes actual values toward design values",async()=>{
+ const image=await solidPng();const box={x:2,y:2,width:10,height:10};
+ const truth=designTruth(image,[{id:"forecast",name:"未来利率预测",type:"TEXT",text:"未来利率预测",box,style:{fontWeight:500},children:[]}]);
+ const result=await compareDesignToPage(truth,{image,elements:[{selector:"body > div",tag:"div",dataFigmaId:"forecast",text:"未来利率预测",box,style:{fontWeight:400}}],audits:[],diagnostics:[],finalUrl:"https://example.test"},parseAcceptanceYaml(),"zh-CN");
+ const issue=result.issues.find(issue=>hasRule(issue,"typography"))!;
+ assert.match(issue.summary,/设计为 500.*实际为 400/);assert.match(issue.primaryAction,/字重由 400 调整为 500/);assert.doesNotMatch(issue.primaryAction,/字号|行高|body|div|CSS/);
 });

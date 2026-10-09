@@ -142,3 +142,15 @@ test("explains design-only unmatched coverage when no module was verified", () =
   assert.equal(model.unpublished.length, 0);
   assert.equal(model.unmatchedDesignCount, 3);
 });
+
+
+test("actual-driven scope does not present design-only nodes as incomplete structural review", () => {
+  const model = buildStructureReportModel({ issues: [], matching: {
+    matches: [], unmatchedDesignCount: 4, unmatchedActualCount: 0, diagnostics: [],
+    pageAlignment: { summary: "", regions: [], rejectedRegionCount: 0 },
+    designCoverage: { policy: "actual-driven", items: [{ figmaNodeId: "extra", name: "设计独有模块", status: "outside-scope", reasonCode: "outside-actual-scope", reviewStatus: "not-applicable", issueIds: [] }] }
+  }});
+  assert.equal(model.unmatchedDesignCount, 0);
+  assert.equal(model.coverageIncomplete, false);
+  assert.equal(model.confirmed.length, 0);
+});

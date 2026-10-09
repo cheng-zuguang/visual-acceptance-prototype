@@ -106,12 +106,14 @@ test("reviews multiple independent PagePairs and keeps caller page identities", 
         clientPageId: "market-home",
         pageName: "行情首页",
         design: designInput,
+        rulesYaml: "rules:\n  position: ignore",
         actual: { kind: "live", url: "https://h5.example.com/home" }
       },
       {
         clientPageId: "market-detail",
         pageName: "行情详情",
         design: designInput,
+        rulesYaml: "rules:\n  position: ignore",
         actual: { kind: "live", url: "https://h5.example.com/detail" }
       }
     ]
@@ -160,8 +162,8 @@ test("keeps execution status separate from mixed UI verdicts", async () => {
     reviewName: "行情模块",
     locale: "zh-CN",
     pagePairs: [
-      { clientPageId: "pass", pageName: "通过页", design: designInput, actual: { kind: "live", url: "https://h5.example.com/pass" } },
-      { clientPageId: "fail", pageName: "失败页", design: designInput, actual: { kind: "live", url: "https://h5.example.com/fail" } },
+      { clientPageId: "pass", pageName: "通过页", design: designInput, rulesYaml: "rules:\n  position: ignore", actual: { kind: "live", url: "https://h5.example.com/pass" } },
+      { clientPageId: "fail", pageName: "失败页", design: designInput, rulesYaml: "rules:\n  position: ignore", actual: { kind: "live", url: "https://h5.example.com/fail" } },
       {
         clientPageId: "review",
         pageName: "待确认页",
@@ -199,8 +201,8 @@ test("retains completed page results when another PagePair execution fails", asy
     reviewName: "行情模块",
     locale: "zh-CN",
     pagePairs: [
-      { clientPageId: "completed", pageName: "已完成页", design: designInput, actual: { kind: "live", url: "https://h5.example.com/completed" } },
-      { clientPageId: "broken", pageName: "采集失败页", design: designInput, actual: { kind: "live", url: "https://h5.example.com/broken" } }
+      { clientPageId: "completed", pageName: "已完成页", design: designInput, rulesYaml: "rules:\n  position: ignore", actual: { kind: "live", url: "https://h5.example.com/completed" } },
+      { clientPageId: "broken", pageName: "采集失败页", design: designInput, rulesYaml: "rules:\n  position: ignore", actual: { kind: "live", url: "https://h5.example.com/broken" } }
     ]
   });
 

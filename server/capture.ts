@@ -94,6 +94,13 @@ function fingerprintFor(
     ["line-height", element.style.lineHeight],
     ["letter-spacing", element.style.letterSpacing],
     ["text-align", element.style.textAlign],
+    ["display", element.style.display],
+    ["direction", element.style.direction],
+    ["flex-direction", element.style.flexDirection],
+    ["justify-content", element.style.justifyContent],
+    ["align-items", element.style.alignItems],
+    ["padding-left", element.style.paddingLeft],
+    ["padding-right", element.style.paddingRight],
     ["border", element.style.borderColor],
     ["border-width", element.style.borderWidth],
     ["radius", element.style.borderRadius],
@@ -612,6 +619,9 @@ async function capturePreparedPage(
           }
           const selector = selectorFor(element);
           capturedSelectors.set(element, selector);
+          const textRange = document.createRange();
+          textRange.selectNodeContents(element);
+          const renderedText = text ? textRange.getBoundingClientRect() : undefined;
           elements.push({
             selector,
             parentSelector: parentElement ? capturedSelectors.get(parentElement) : undefined,
@@ -640,6 +650,14 @@ async function capturePreparedPage(
               lineHeight: number(computed.lineHeight),
               letterSpacing: number(computed.letterSpacing),
               textAlign: computed.textAlign,
+              display: computed.display,
+              direction: computed.direction,
+              flexDirection: computed.flexDirection,
+              justifyContent: computed.justifyContent,
+              alignItems: computed.alignItems,
+              paddingLeft: number(computed.paddingLeft),
+              paddingRight: number(computed.paddingRight),
+              ...(renderedText && renderedText.width > 0 ? { textBounds: { x: renderedText.x, y: renderedText.y, width: renderedText.width, height: renderedText.height } } : {}),
               borderColor: computed.borderTopColor,
               borderWidth,
               borderRadius: number(computed.borderTopLeftRadius),

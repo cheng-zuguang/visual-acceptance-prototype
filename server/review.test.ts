@@ -3,6 +3,7 @@ import test from "node:test";
 import sharp from "sharp";
 import type {
   DesignTruth,
+  DesignCoverage,
   DomElement,
   FigmaDesignTruth,
   LiveActualEvidence,
@@ -131,7 +132,7 @@ test("reviews a Figma PagePair through DesignTruth", async () => {
   assert.deepEqual(report.diagnostics, ["design truth built", "page captured"]);
 });
 
-test("ReviewService publishes the three fed-page module verification actions without Agent or complete capture", async () => {
+test("ReviewService keeps design-only fed-page modules outside actual scope even with incomplete capture", async () => {
   // Minimized topology from the reported Frame: policy background/title are siblings.
   // This is a regression fixture, not a designer-approved gold-set label or live replay.
   const image = await solidPng(375, 2370);
@@ -151,11 +152,15 @@ test("ReviewService publishes the three fed-page module verification actions wit
     coverage: { fullDocument: false, elementLimitReached: false, opaqueContent: false, excludedContent: false } }));
   const service = new ReviewService({ dependencies: { buildDesignTruthFromFigma: async () => truth, captureLiveActualEvidence: async () => actual } });
   const report = await service.reviewPagePair({ locale: "zh-CN", design: figmaDesignInput, h5Url: "https://example.test/fed" });
-  const modules = report.issues.filter(issue => issue.coverageModule);
-  assert.deepEqual(modules.map(issue => issue.coverageModule!.name), ["快评", "最新货币政策", "投票"]);
-  assert.ok(modules.every(issue => issue.severity === "pending"));
-  assert.match(report.markdown, /模块核验建议/);
-  for (const name of ["快评", "最新货币政策", "投票"]) assert.ok(report.reportHtml.includes(`${name} 模块疑似缺失`));
+  assert.ok(!report.issues.some(issue => issue.rule === "missing_module" || issue.rule === "design_coverage_unverified"));
+  assert.equal(report.matching.designCoverage?.policy, "actual-driven");
+  for (const name of ["快评", "最新货币政策", "投票"]) {
+    const item: DesignCoverage["items"][number] = report.matching.designCoverage!.items.find(candidate => candidate.name === name)!;
+    assert.equal(item.status, "outside-scope");
+    assert.equal(item.reviewStatus, "not-applicable");
+    assert.deepEqual(item.issueIds, []);
+    assert.ok(!report.reportHtml.includes(`${name} 模块疑似缺失`));
+  }
 });
 
 test("rejects a PagePair that has no Figma DesignTruth input", async () => {
@@ -287,7 +292,7 @@ test("passes only final ReviewIssues and verified matched alignment into AI advi
   const service = new ReviewService({
     dependencies: {
       buildDesignTruthFromFigma: async () => figmaTruth(designImage),
-      captureLiveActualEvidence: async () => liveEvidence({ image: actualImage }),
+      captureLiveActualEvidence: async () => liveEvidence({ image: actualImage, audits: [{ rule: "clipped_text", selector: "p", summary: "实际说明文字被截断" }] }),
       generateAiAdvice: async (input) => {
         assert.ok(input.issues.length > 0);
         assert.equal(input.issues.every((issue) => Boolean(issue.priority)), true);
@@ -333,7 +338,7 @@ test("publishes completed advice and its timeout diagnostic together", async () 
     background: { r: 0, g: 0, b: 0, alpha: 1 } } }).png().toBuffer();
   const service = new ReviewService({ dependencies: {
     buildDesignTruthFromFigma: async () => figmaTruth(image),
-    captureLiveActualEvidence: async () => liveEvidence({ image: actualImage }),
+    captureLiveActualEvidence: async () => liveEvidence({ image: actualImage, audits: [{ rule: "clipped_text", selector: "p", summary: "实际说明文字被截断" }] }),
     generateAiAdvice: async ({ issues }) => {
       const issue = issues[0];
       assert.ok(issue);
@@ -363,7 +368,7 @@ test("publishes a structured AI timeout rejection without failing the determinis
   const service = new ReviewService({
     dependencies: {
       buildDesignTruthFromFigma: async () => figmaTruth(designImage),
-      captureLiveActualEvidence: async () => liveEvidence({ image: actualImage }),
+      captureLiveActualEvidence: async () => liveEvidence({ image: actualImage, audits: [{ rule: "clipped_text", selector: "p", summary: "实际说明文字被截断" }] }),
       generateAiAdvice: async () => {
         const error = new Error("The operation was aborted due to timeout");
         error.name = "TimeoutError";
@@ -402,7 +407,7 @@ test("publishes a structured AI format rejection for an invalid advice contract"
   const service = new ReviewService({
     dependencies: {
       buildDesignTruthFromFigma: async () => figmaTruth(designImage),
-      captureLiveActualEvidence: async () => liveEvidence({ image: actualImage }),
+      captureLiveActualEvidence: async () => liveEvidence({ image: actualImage, audits: [{ rule: "clipped_text", selector: "p", summary: "实际说明文字被截断" }] }),
       generateAiAdvice: async () => {
         throw new Error("AI advice must contain between one and five grounded priorities.");
       }
@@ -673,8 +678,10 @@ test("exposes EvidenceConfidence and intersection coverage in the final report",
   assert.equal(report.summary.unmatchedActualElements, 1);
   assert.equal(report.matching.matches[0].evidenceConfidence.basis[0], "exact-id");
   assert.equal(report.diagnostics.some((item) => item.startsWith("设计覆盖：")), true);
-  assert.ok(report.matching.designCoverage?.items.some(item => item.status === "unverified"));
-  assert.ok(report.issues.some(issue => issue.rule === "design_coverage_unverified"));
+  assert.equal(report.matching.designCoverage?.policy, "actual-driven");
+  assert.ok(report.matching.designCoverage?.items.some(item => item.status === "outside-scope" && item.reviewStatus === "not-applicable"));
+  assert.ok(!report.issues.some(issue => issue.rule === "design_coverage_unverified" || issue.rule === "missing_module"));
+  assert.ok(report.issues.some(issue => issue.rule === "actual_coverage_unverified"));
 });
 
 test("reviews uploaded screenshots as the formal Screenshot ActualEvidence", async () => {
@@ -717,20 +724,12 @@ test("reviews uploaded screenshots as the formal Screenshot ActualEvidence", asy
 
   assert.equal(report.evidenceMode, "screenshot");
   assert.equal(report.source.actual, "Screenshot · device.png");
-  assert.ok(report.summary.similarity < 1);
-  assert.equal(report.issues.some((issue) => issue.rule === "visual_similarity"), true);
-  const region = report.issues.find((issue) => issue.rule === "visual_region");
-  assert.equal(region?.severity, "pending");
-  assert.equal(region?.figmaNodeId, "2:market-card");
-  assert.ok((region?.evidenceConfidence.score ?? 1) <= 0.82);
-  assert.deepEqual(region?.evidenceConfidence.basis, ["visual-inference", "pixel-measurement"]);
-  assert.equal(report.issues.every((issue) => Boolean(issue.priority)), true);
-  assert.equal(report.issues.every((issue) => issue.evidence.length > 0), true);
-  assert.match(report.markdown, new RegExp(report.issues[0].title));
-  assert.match(report.reportHtml, new RegExp(report.issues[0].title));
-  assert.match(report.markdown, new RegExp(report.issues[0].priority));
-  assert.match(report.reportHtml, new RegExp(`>${report.issues[0].priority}<`));
-  assert.equal(report.dynamicNormalization.regions.length, 0);
+  assert.equal(report.status, "needs_review");
+  assert.equal(report.matching.visualScope?.reviewedPixels, 0);
+  assert.ok(!report.issues.some(issue => issue.rule === "visual_similarity" || issue.rule === "missing_module" || issue.rule === "visual_region"));
+  assert.ok(report.matching.designCoverage?.items.every(item => item.reviewStatus === "not-applicable"));
+  assert.ok(report.images.diff.startsWith("data:image/png;base64,"));
+
 });
 
 test("runs a Hybrid review at the device viewport while keeping the device screenshot formal", async () => {
@@ -810,9 +809,9 @@ test("uses screenshot OCR anchors for capped visual parameter checks", async () 
 
   assert.equal(report.matching.matches[0].method, "visual-inference");
   assert.ok(report.matching.matches[0].evidenceConfidence.score <= 0.82);
-  const position = report.issues.find((issue) => issue.rule === "position");
-  assert.equal(position?.severity, "pending");
-  assert.ok((position?.evidenceConfidence.score ?? 1) <= 0.82);
+  assert.ok(!report.issues.some(issue => issue.rule === "position"));
+  const item = report.matching.designCoverage!.items.find(item => item.figmaNodeId === "2:title") ?? report.matching.designCoverage!.items[0];
+  assert.ok(item.checks?.some(check => check.rule === "position" && check.status === "pending"));
 });
 
 
@@ -829,7 +828,7 @@ test("Jev advice selection uses server credentials and publishes phase timing wi
     now: () => ++clock * 10,
     dependencies: {
       buildDesignTruthFromFigma: async () => figmaTruth(image),
-      captureLiveActualEvidence: async () => liveEvidence({ image: actualImage }),
+      captureLiveActualEvidence: async () => liveEvidence({ image: actualImage, audits: [{ rule: "clipped_text", selector: "p", summary: "实际说明文字被截断" }] }),
       generateAiAdvice: async () => { throw new Error("wrong provider"); },
       generateJevAdvice: async input => {
         calls++;

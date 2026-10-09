@@ -145,7 +145,14 @@ export function buildHybridActualEvidence(
           ...sample,
           elements: sample.elements.map((element) => ({
             ...element,
-            box: projectBox(element.box, transform)
+            box: projectBox(element.box, transform),
+            style: {
+              ...element.style,
+              ...(element.style.textBounds ? { textBounds: projectBox(element.style.textBounds, transform) } : {}),
+              ...(element.style.paddingLeft !== undefined ? { paddingLeft: element.style.paddingLeft * transform.scaleX } : {}),
+              ...(element.style.paddingRight !== undefined ? { paddingRight: element.style.paddingRight * transform.scaleX } : {}),
+              ...(element.style.borderWidth !== undefined ? { borderWidth: element.style.borderWidth * transform.scaleX } : {})
+            }
           }))
         }))
       }

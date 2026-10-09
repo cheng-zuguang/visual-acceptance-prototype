@@ -172,6 +172,7 @@ test("reports deterministic header, column, row, gap, divider, and alignment dif
       cell.box.height = 50;
     });
     cells[0].style.textAlign = "right";
+    cells[0].style.textBounds = {x:cells[0].box.x + cells[0].box.width - 30,y:row.box.y,width:30,height:16};
   });
 
   const result = await compareDesignToPage(
@@ -196,7 +197,7 @@ test("reports deterministic header, column, row, gap, divider, and alignment dif
     "zh-CN"
   );
 
-  const rules = new Set(result.issues.map((issue) => issue.rule));
+  const rules = new Set(result.issues.flatMap(issue => issue.evidence.map(evidence => evidence.rule)));
   assert.equal(rules.has("market_list_header"), true);
   assert.equal(rules.has("market_list_column_width"), true);
   assert.equal(rules.has("market_list_row_height"), true);
@@ -725,4 +726,39 @@ test("a bound numeric table is reviewed without special Figma header and row nam
   const result=analyzeMarketLists(design,elements,'en');
   assert.equal(result.summary.matches.length,1);
   assert.equal(result.templateBindings.length,9);
+});
+
+
+function flexListScenario() {
+  const fixture = scenario();
+  for (const cell of fixture.elements.filter(element => element.tag === "span")) {
+    const right = cell.style.textAlign === "right";
+    cell.style = { ...cell.style, display: "flex", textAlign: "start", justifyContent: right ? "flex-end" : "flex-start",
+      textBounds: { x: right ? cell.box.x + cell.box.width - 30 : cell.box.x, y: cell.box.y + 10, width: 30, height: 16 } };
+  }
+  return fixture;
+}
+
+test("table column alignment accepts rendered flex alignment instead of comparing text-align strings", () => {
+  const { design, elements } = flexListScenario();
+  const columns = analyzeMarketLists(design, elements, "zh-CN").summary.matches[0].columns;
+  assert.deepEqual(columns.map(column => [column.expectedAlignment, column.actualAlignment]), [["left", "left"], ["right", "right"], ["right", "right"]]);
+});
+
+test("table alignment inspects every row and retains a later rendered mismatch", () => {
+  const { design, elements } = flexListScenario();
+  const laterCell = elements.find(element => element.selector === "#quotes > .row:nth-of-type(3) > span:nth-of-type(2)")!;
+  laterCell.style.textBounds!.x = laterCell.box.x;
+  const column = analyzeMarketLists(design, elements, "zh-CN").summary.matches[0].columns[1];
+  assert.equal(column.expectedAlignment, "right");
+  assert.equal(column.actualAlignment, "偏离目标对齐");
+});
+
+test("table alignment does not certify a column when any flex row lacks rendered evidence", () => {
+  const { design, elements } = flexListScenario();
+  const laterCell = elements.find(element => element.selector === "#quotes > .row:nth-of-type(3) > span:nth-of-type(2)")!;
+  delete laterCell.style.textBounds;
+  const analysis = analyzeMarketLists(design, elements, "zh-CN");
+  assert.equal(analysis.summary.matches[0].columns[1].actualAlignment, undefined);
+  assert.ok(analysis.templateBindings.some(binding => binding.actual.selector === laterCell.selector), "per-element review retains the uncertain row for pending checks");
 });

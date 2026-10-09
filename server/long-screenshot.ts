@@ -626,7 +626,7 @@ export async function aggregateLongScreenshotComparisons(input: {
   const matching = {
     ...(comparisons.some(comparison => comparison.matching.designCoverage) ? {
       designCoverage: {
-        policy: "design-driven" as const,
+        policy: comparisons.some(item => item.matching.designCoverage?.policy === "actual-driven") ? "actual-driven" as const : "design-driven" as const,
         items: comparisons.flatMap((comparison, index) => (comparison.matching.designCoverage?.items ?? []).flatMap(item => {
           const tile = evidence.tiles[index];
           const issueIds = item.issueIds.map(id => `tile-${tile.index}:${id}`).filter(id => issues.some(issue => issue.id === id));

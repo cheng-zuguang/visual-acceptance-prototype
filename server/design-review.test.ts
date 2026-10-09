@@ -44,12 +44,12 @@ test("the design checklist retains every executed layout and style comparison, i
   const result = await compareDesignToPage(design, evidence, parseAcceptanceYaml("rules:\n  color: ignore"), "en");
   const checks = result.matching.designCoverage!.items[0].checks!;
   const outcome = (name: string) => checks.find(check => check.property === name)?.status;
-  assert.equal(outcome("x"), "difference");
-  assert.equal(outcome("y"), "passed");
+  assert.equal(outcome("x"), "pending");
+  assert.equal(outcome("y"), "pending");
   assert.equal(outcome("width"), "passed");
   assert.equal(outcome("text"), "passed");
   assert.equal(outcome("fontWeight"), "difference");
-  assert.equal(outcome("textAlign"), "passed");
+  assert.equal(outcome("textAlign"), "pending"); // CSS equality without rendered bounds does not prove visual alignment.
   assert.equal(outcome("color"), "not-run");
   assert.equal(outcome("borderWidth"), "passed");
   assert.equal(outcome("opacity"), "passed");
@@ -114,7 +114,9 @@ test("flat side-by-side cards use visual containment without forcing full-width 
   for (const sample of evidence.samples) sample.elements = [];
   const before = structuredClone(design.root);
   const result = await compareDesignToPage(design, evidence, parseAcceptanceYaml(), "en");
-  assert.equal(result.issues.filter(issue => issue.rule === "missing_module").length, 1);
+  assert.equal(result.issues.filter(issue => issue.rule === "missing_module").length, 0);
+  assert.equal(result.matching.designCoverage!.items.length, 3);
+  assert.ok(result.matching.designCoverage!.items.every(item => item.status === "outside-scope" && item.reviewStatus === "not-applicable"));
   const title = result.matching.designCoverage!.items.find(item => item.figmaNodeId === "title")!;
   assert.equal(title.groupedParentFigmaNodeId, "card");
   assert.equal(title.parentFigmaNodeId, "root");
@@ -174,10 +176,10 @@ test("a verified container and its heading isolate regional displacement from in
   const local = result.issues.find(issue => issue.rule === "position" && issue.figmaNodeId === "field1");
   assert.match(local!.summary, /15px/);
   assert.ok(!result.issues.some(issue => issue.rule === "position" && issue.figmaNodeId === "field0"));
-  assert.ok(result.issues.some(issue => issue.figmaNodeId === "card" && issue.rule === "region_displacement" && issue.severity === "pending"));
+  assert.ok(!result.issues.some(issue => issue.rule === "region_displacement"));
 });
 
-test("regional pixel acceptance compensates verified translation while keeping the original diagnostic diff", async () => {
+test("local pixel acceptance compares reliable matched content while keeping the original diagnostic diff", async () => {
   const { design, evidence } = await fixture();
   const draw = (dy: number) => sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600"><rect width="400" height="600" fill="white"/><rect x="10" y="${200+dy}" width="360" height="160" fill="blue"/><rect x="20" y="${210+dy}" width="100" height="20" fill="black"/><rect x="20" y="${330+dy}" width="100" height="20" fill="black"/></svg>`)).png().toBuffer();
   design.render.image = await draw(0);
@@ -192,17 +194,20 @@ test("regional pixel acceptance compensates verified translation while keeping t
   }
   const result = await compareDesignToPage(design, evidence, parseAcceptanceYaml(), "en");
   assert.equal(result.similarity, 1);
-  assert.equal(result.matching.visualScope?.reviewedPixels, 360 * 160);
+  assert.equal(result.matching.visualScope?.reviewedPixels, 2 * 100 * 20);
+  assert.ok(result.matching.visualScope!.reviewedPixels < 360 * 160);
   assert.equal(result.matching.visualScope?.canvasPixels, 400 * 600);
   assert.ok(!result.issues.some(issue => issue.rule === "visual_similarity"));
   const diff = await sharp(result.diffImage).ensureAlpha().raw().toBuffer();
   assert.ok(diff.some((value, index) => index % 4 === 3 && value > 0));
-  const defect = await sharp(image).composite([{ input: await sharp({ create: { width: 50, height: 30, channels: 4, background: "white" } }).png().toBuffer(), left: 50, top: 150 }]).png().toBuffer();
+  const defect = await sharp(image).composite([{ input: await sharp({ create: { width: 50, height: 20, channels: 4, background: "white" } }).png().toBuffer(), left: 50, top: 110 }]).png().toBuffer();
   for (const sample of evidence.samples) sample.image = defect;
   const withDefect = await compareDesignToPage(design, evidence, parseAcceptanceYaml(), "en");
-  const pixel = withDefect.issues.find(issue => issue.rule === "visual_region")!;
-  assert.ok(pixel?.actualBox && pixel.designBox);
-  assert.equal(pixel.designBox.y - pixel.actualBox.y, 100);
+  assert.ok(withDefect.similarity < result.similarity);
+  assert.equal(withDefect.similarity, 0.75);
+  assert.ok(withDefect.issues.some(issue => issue.rule === "visual_similarity" && issue.severity === "error"));
+  const matchedHeading = withDefect.matching.designCoverage!.items.find(item => item.figmaNodeId === "text0")!;
+  assert.equal(matchedHeading.designBox!.y - matchedHeading.actualBox!.y, 100);
 
 });
 
@@ -216,7 +221,7 @@ test("overlapping inner backgrounds fall back to their unambiguous enclosing reg
   assert.equal(result.matching.designCoverage!.items.find(item => item.figmaNodeId === "label")?.groupedParentFigmaNodeId, "outer");
 });
 
-test("a missing short-title module is verified by stable bracketing regions and its collapsed layout gap", async () => {
+test("a design-only short-title module stays outside H5 scope without shifting downstream position checks", async () => {
   const { design, evidence } = await fixture();
   const group = (id: string, y: number, labels: string[]) => ({ id, parentId: "root", name: id, type: "GROUP", box: { x: 10, y, width: 360, height: 100 }, style: {},
     children: labels.map((text, i) => ({ id: `${id}-${i}`, parentId: id, name: text, type: "TEXT", text, box: { x: 20, y: y + 10 + i * 50, width: 100, height: 20 }, style: {}, children: [] })) });
@@ -230,26 +235,26 @@ test("a missing short-title module is verified by stable bracketing regions and 
     });
   }
   const result = await compareDesignToPage(design, evidence, parseAcceptanceYaml(), "en");
-  const missing = result.issues.find(issue => issue.rule === "missing_module" && issue.figmaNodeId === "omitted");
-  assert.ok(missing);
-  assert.match(missing.summary, /120/);
-  assert.ok(!result.issues.some(issue => issue.rule === "region_displacement" && issue.figmaNodeId === "after"));
-  const coverage = result.matching.designCoverage!.items.find(item => item.figmaNodeId === "omitted")!;
-  assert.equal(coverage.status, "missing");
-  assert.deepEqual(coverage.absenceEvidence?.layoutGap?.affectedRegionIds, ["after"]);
+  const assertOutsideScope = (review: typeof result) => {
+    assert.equal(review.matching.designCoverage!.items.length, 9);
+    const omitted = review.matching.designCoverage!.items.filter(item => item.figmaNodeId.startsWith("omitted"));
+    assert.equal(omitted.length, 3);
+    assert.ok(omitted.every(item => item.status === "outside-scope" && item.reviewStatus === "not-applicable" && item.issueIds.length === 0));
+    assert.ok(!review.issues.some(issue => ["missing_module", "region_displacement"].includes(issue.rule)));
+    assert.ok(!review.issues.some(issue => issue.rule === "position" && issue.figmaNodeId?.startsWith("after")));
+  };
+  assertOutsideScope(result);
+  // Alignment displacement remains reproducible diagnostic evidence, not an acceptance finding.
+  assert.equal(result.matching.pageAlignment.regions.find(region => region.designParentFigmaNodeId === "after")?.displacement?.y, -120);
   design.root.children[2].children[1].text = "关于投票的报道";
   for (const sample of evidence.samples) sample.elements.find(item => item.selector === "after > after-1")!.text = "关于投票的报道";
-  const unrelatedText = await compareDesignToPage(design, evidence, parseAcceptanceYaml(), "en");
-  assert.ok(unrelatedText.issues.some(issue => issue.rule === "missing_module" && issue.figmaNodeId === "omitted"));
+  assertOutsideScope(await compareDesignToPage(design, evidence, parseAcceptanceYaml(), "en"));
+  // A shared page translation must not turn the intentional omission into a positional defect.
   for (const sample of evidence.samples) for (const element of sample.elements) element.box.y -= 20;
-  const partial = await compareDesignToPage(design, evidence, parseAcceptanceYaml(), "en");
-  assert.equal(partial.matching.designCoverage!.items.find(item => item.figmaNodeId === "after")?.displacement?.causeStatus, "partial");
-  assert.ok(partial.issues.some(issue => issue.rule === "region_displacement" && issue.figmaNodeId === "after"));
-  for (const sample of evidence.samples) for (const element of sample.elements) element.box.y += 20;
-  // A smaller shift is not proof that this particular module vanished.
+  assertOutsideScope(await compareDesignToPage(design, evidence, parseAcceptanceYaml(), "en"));
+  // Nor may a different collapsed gap reintroduce cumulative top-to-bottom checks.
   for (const sample of evidence.samples) for (const element of sample.elements.filter(item => item.selector.startsWith("after"))) element.box.y += 70;
-  const ambiguous = await compareDesignToPage(design, evidence, parseAcceptanceYaml(), "en");
-  assert.ok(!ambiguous.issues.some(issue => issue.rule === "missing_module" && issue.figmaNodeId === "omitted"));
+  assertOutsideScope(await compareDesignToPage(design, evidence, parseAcceptanceYaml(), "en"));
 });
 
 test("normalizing a date never hides a changed fixed label in the same text node", async () => {
@@ -321,7 +326,7 @@ test("typed probability cells bind within independently identified columns and k
   assert.ok(!result.issues.some(issue => issue.rule === "content" && issue.figmaNodeId === "value0"));
 });
 
-test("a locally passing nested region with an unresolved published displacement cannot claim acceptance", async () => {
+test("local child offsets remain actionable while nested page displacement stays diagnostic", async () => {
   const {design,evidence}=await fixture();
   const fields=['Latest probability','Previous probability','Weekly probability'].map((text,i)=>({id:`f${i}`,parentId:'table',name:text,text,type:'TEXT',box:{x:30+i*100,y:300,width:90,height:20},style:{},children:[]}));
   const table={id:'table',parentId:'card',name:'Probability table',type:'GROUP',box:{x:20,y:280,width:340,height:80},style:{},children:fields};
@@ -335,8 +340,15 @@ test("a locally passing nested region with an unresolved published displacement 
   ].map(({node,selector,parentSelector,dx})=>({...base,dataFigmaId:node.id,selector,parentSelector,text:('text' in node ? node.text : '')??'',style:{},box:{...node.box!,x:node.box!.x+dx,y:node.box!.y-100},fingerprint:{...base.fingerprint,key:node.id}}));}
   const result=await compareDesignToPage(design,evidence,parseAcceptanceYaml(),'en');
   const item=result.matching.designCoverage!.items.find(i=>i.figmaNodeId==='table')!;
-  assert.ok(result.issues.some(i=>i.figmaNodeId==='table' && ['position','region_displacement'].includes(i.rule)));
-  assert.notEqual(item.reviewStatus,'passed');
+  assert.ok(!result.issues.some(i=>i.rule==='region_displacement'));
+  assert.ok(!result.issues.some(i=>i.figmaNodeId==='table' && i.rule==='position'));
+  assert.equal(item.checks?.find(check => check.property === 'x')?.status, 'passed');
+  assert.equal(item.checks?.find(check => check.property === 'y')?.status, 'passed');
+  for (const field of fields) {
+    const coverage = result.matching.designCoverage!.items.find(i => i.figmaNodeId === field.id)!;
+    assert.equal(coverage.checks?.find(check => check.property === 'x')?.status, 'difference');
+    assert.ok(result.issues.some(issue => issue.figmaNodeId === field.id && issue.evidence.some(e => e.rule === 'position')));
+  }
 });
 
 test("a graphical instruction marker cannot bind to a nearby price label by geometry", async () => {
@@ -346,15 +358,19 @@ test("a graphical instruction marker cannot bind to a nearby price label by geom
   const result=await compareDesignToPage(design,evidence,parseAcceptanceYaml(),'en');
   assert.equal(result.matching.matches.length,0);
   assert.ok(!result.issues.some(i=>i.figmaNodeId==='heading'&&['position','size','decoration','typography'].includes(i.rule)));
-  assert.equal(result.matching.designCoverage!.items[0].reviewStatus,'pending');
+  assert.equal(result.matching.designCoverage!.items[0].reviewStatus,'not-applicable');
+  assert.equal(result.matching.designCoverage!.items[0].status,'outside-scope');
+  assert.ok(result.issues.some(issue => issue.rule === 'actual_coverage_unverified' && issue.selector === 'h1' && issue.severity === 'pending'));
 });
 
 test("an unverified geometric candidate produces coverage work instead of CSS repair instructions", async () => {
   const {design,evidence}=await fixture();
   Object.assign(design.root.children[0],{type:'RECTANGLE',name:'Mask',text:undefined});
-  for(const sample of evidence.samples)Object.assign(sample.elements[0],{dataFigmaId:undefined,text:undefined,tag:'div',box:{x:28,y:20,width:120,height:24}});
+  for(const sample of evidence.samples)Object.assign(sample.elements[0],{dataFigmaId:undefined,text:undefined,tag:'div',style:{backgroundColor:'#111111'},box:{x:28,y:20,width:120,height:24}});
   const result=await compareDesignToPage(design,evidence,parseAcceptanceYaml(),'en');
-  assert.ok(result.issues.some(i=>i.rule==='design_coverage_unverified'));
+  assert.ok(result.issues.some(i=>i.rule==='actual_coverage_unverified' && i.selector === 'h1' && i.severity === 'pending'));
+  assert.equal(result.matching.designCoverage!.items[0].status, 'outside-scope');
+  assert.equal(result.matching.designCoverage!.actualItems![0].status, 'unverified');
   assert.ok(!result.issues.some(i=>i.figmaNodeId==='heading'&&['position','size','typography','decoration'].includes(i.rule)));
 });
 
@@ -375,7 +391,7 @@ test("nested design regions never reverse their actual ancestor ordering", async
   assert.ok(!regions.some(p=>p.designParentFigmaNodeId==='outer'&&p.actualParentSelector==='article > section')||!regions.some(c=>c.designParentFigmaNodeId==='inner'&&c.actualParentSelector==='article'));
 });
 
-test("a verified collapsed control makes downstream vertical placement pending while keeping horizontal defects", async () => {
+test("a verified collapsed control cannot supply a page reference for downstream horizontal or vertical placement", async () => {
   const {design,evidence}=await fixture();
   const heading=design.root.children[0]; heading.box={x:20,y:300,width:100,height:24};
   design.root.children.unshift({id:'instructions',name:'Instructions',type:'FRAME',box:{x:10,y:20,width:360,height:250},style:{},children:[]});
@@ -383,5 +399,6 @@ test("a verified collapsed control makes downstream vertical placement pending w
   const result=await compareDesignToPage(design,evidence,parseAcceptanceYaml(),'en');
   const checks=result.matching.designCoverage!.items.find(i=>i.figmaNodeId==='heading')!.checks!;
   assert.equal(checks.find(c=>c.property==='y')?.status,'pending');
-  assert.equal(checks.find(c=>c.property==='x')?.status,'difference');
+  assert.equal(checks.find(c=>c.property==='x')?.status,'pending');
+  assert.ok(!result.issues.some(issue => issue.rule === 'position' && issue.figmaNodeId === 'heading'));
 });
